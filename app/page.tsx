@@ -242,9 +242,9 @@ export default function Home() {
                   placeholder="sk-ant-..."
                 />
                 <p className="hint" style={{ marginTop: '0.5rem' }}>
-                  Get your API key at{' '}
+                  Get your API key from {' '}
                   <a href="https://platform.claude.com/settings/keys" target="_blank" rel="noopener noreferrer">
-                    console.anthropic.com
+                    Anthropic's console
                   </a>
                   . You&apos;ll need an Anthropic account with API credits.
                 </p>
