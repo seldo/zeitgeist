@@ -1,35 +1,124 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 
 type AppState =
+  | { status: 'initializing' }
   | { status: 'login' }
   | { status: 'loading'; message: string }
-  | { status: 'done'; summary: string; postCount: number }
+  | { status: 'done'; summary: string; postCount: number; handle: string }
   | { status: 'error'; message: string }
 
 export default function Home() {
-  const [state, setState] = useState<AppState>({ status: 'login' })
+  const [state, setState] = useState<AppState>({ status: 'initializing' })
   const [handle, setHandle] = useState('')
-  const [password, setPassword] = useState('')
   const [apiKey, setApiKey] = useState('')
+  const clientRef = useRef<import('@atproto/oauth-client-browser').BrowserOAuthClient | null>(null)
+  const agentRef = useRef<import('@atproto/api').Agent | null>(null)
 
   const ownerHandle = process.env.NEXT_PUBLIC_OWNER_HANDLE ?? 'seldo.com'
   const isOwner = handle.trim().replace(/^@/, '') === ownerHandle
 
-  async function signIn() {
-    const trimmedHandle = handle.trim().replace(/^@/, '')
-    const trimmedPassword = password.trim()
-    if (!trimmedHandle || !trimmedPassword) return
+  useEffect(() => {
+    initOAuth()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
+  async function initOAuth() {
     try {
-      setState({ status: 'loading', message: 'Signing in...' })
+      const { BrowserOAuthClient } = await import('@atproto/oauth-client-browser')
 
-      const { AtpAgent } = await import('@atproto/api')
-      const agent = new AtpAgent({ service: 'https://bsky.social' })
-      await agent.login({ identifier: trimmedHandle, password: trimmedPassword })
+      const origin = window.location.origin
+      const redirectUri = `${origin}/`
+      const isLocalhost = window.location.hostname === 'localhost'
+        || window.location.hostname === '127.0.0.1'
 
+      let clientId: string
+
+      if (isLocalhost) {
+        // In dev, use CIMD service to get a publicly accessible client_id
+        // (loopback clients can't request transition:generic scope)
+        const cimdRes = await fetch('https://cimd-service.fly.dev/clients', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            client_name: 'Zeitgeist',
+            client_uri: origin,
+            redirect_uris: [redirectUri],
+            scope: 'atproto transition:generic',
+            grant_types: ['authorization_code', 'refresh_token'],
+            response_types: ['code'],
+            token_endpoint_auth_method: 'none',
+            application_type: 'web',
+            dpop_bound_access_tokens: true,
+          }),
+        })
+        if (!cimdRes.ok) throw new Error('Failed to register OAuth client with CIMD service')
+        const cimdData = await cimdRes.json()
+        clientId = cimdData.client_id
+      } else {
+        // In production, self-hosted client metadata at /api/client-metadata
+        clientId = `${origin}/api/client-metadata`
+      }
+
+      const client = new BrowserOAuthClient({
+        clientMetadata: {
+          client_id: clientId,
+          client_name: 'Zeitgeist',
+          client_uri: origin,
+          redirect_uris: [redirectUri],
+          scope: 'atproto transition:generic',
+          grant_types: ['authorization_code', 'refresh_token'],
+          response_types: ['code'],
+          token_endpoint_auth_method: 'none',
+          application_type: 'web',
+          dpop_bound_access_tokens: true,
+        },
+        handleResolver: 'https://bsky.social',
+      })
+
+      clientRef.current = client
+
+      // init() handles both session restore and OAuth callback processing
+      const result = await client.init()
+
+      if (result?.session) {
+        const { Agent } = await import('@atproto/api')
+        const agent = new Agent(result.session)
+        agentRef.current = agent
+
+        // Get handle from the authenticated session
+        const profile = await agent.getProfile({ actor: result.session.did })
+        const resolvedHandle = profile.data.handle
+
+        // Restore API key from sessionStorage (stored before OAuth redirect)
+        const storedKey = sessionStorage.getItem('zeitgeist_api_key')
+        const isOwnerSession = resolvedHandle === ownerHandle
+
+        if (!isOwnerSession && !storedKey) {
+          // Non-owner without API key — show form to enter it
+          setState({ status: 'login' })
+          setHandle(resolvedHandle)
+          return
+        }
+
+        await fetchAndSummarize(agent, resolvedHandle, storedKey || undefined)
+      } else {
+        setState({ status: 'login' })
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      setState({ status: 'error', message: msg })
+    }
+  }
+
+  async function fetchAndSummarize(
+    agent: import('@atproto/api').Agent,
+    userHandle: string,
+    key?: string
+  ) {
+    try {
       setState({ status: 'loading', message: 'Fetching your feed...' })
       const posts = await fetchLast24Hours(agent)
 
@@ -43,7 +132,7 @@ export default function Home() {
       const res = await fetch('/api/summarize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ posts, handle: trimmedHandle, apiKey: apiKey.trim() || undefined }),
+        body: JSON.stringify({ posts, handle: userHandle, apiKey: key }),
       })
 
       if (!res.ok) {
@@ -52,16 +141,60 @@ export default function Home() {
       }
 
       const { summary } = await res.json()
-      setState({ status: 'done', summary, postCount: posts.length })
+      setState({ status: 'done', summary, postCount: posts.length, handle: userHandle })
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
       setState({ status: 'error', message: msg })
     }
   }
 
-  function reset() {
+  async function signIn() {
+    const trimmedHandle = handle.trim().replace(/^@/, '')
+    if (!trimmedHandle) return
+
+    // If we already have an OAuth session (handle was pre-filled after callback),
+    // we just need the API key — proceed directly
+    if (agentRef.current) {
+      if (!isOwner && !apiKey.trim()) return
+      if (apiKey.trim()) {
+        sessionStorage.setItem('zeitgeist_api_key', apiKey.trim())
+      }
+      await fetchAndSummarize(agentRef.current, trimmedHandle, apiKey.trim() || undefined)
+      return
+    }
+
+    // No session yet — start OAuth flow
+    if (!isOwner && !apiKey.trim()) return
+
+    // Store API key before redirect so we can retrieve it after
+    if (apiKey.trim()) {
+      sessionStorage.setItem('zeitgeist_api_key', apiKey.trim())
+    }
+
+    try {
+      setState({ status: 'loading', message: 'Redirecting to Bluesky...' })
+      await clientRef.current!.signIn(trimmedHandle, {
+        scope: 'atproto transition:generic',
+      })
+      // Browser will redirect — nothing runs after this
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      setState({ status: 'error', message: msg })
+    }
+  }
+
+  async function refresh() {
+    if (!agentRef.current || state.status !== 'done') return
+    const storedKey = sessionStorage.getItem('zeitgeist_api_key')
+    await fetchAndSummarize(agentRef.current, state.handle, storedKey || undefined)
+  }
+
+  function signOut() {
+    sessionStorage.removeItem('zeitgeist_api_key')
+    agentRef.current = null
+    clientRef.current = null
     setState({ status: 'login' })
-    setPassword('')
+    setHandle('')
     setApiKey('')
   }
 
@@ -71,9 +204,16 @@ export default function Home() {
         <h1 className="siteTitle">Zeitgeist</h1>
         <p className="siteSubtitle">24-hour Bluesky feed summary, powered by Claude</p>
 
+        {state.status === 'initializing' && (
+          <div className="loadingWrap">
+            <div className="spinner" />
+            <p className="loadingMsg">Connecting...</p>
+          </div>
+        )}
+
         {state.status === 'login' && (
           <div className="card">
-            <h2 className="cardTitle">Sign in</h2>
+            <h2 className="cardTitle">Sign in with Bluesky</h2>
             <div className="formGroup">
               <label className="label" htmlFor="handle">Handle</label>
               <input
@@ -84,18 +224,7 @@ export default function Home() {
                 onChange={(e) => setHandle(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && signIn()}
                 placeholder="you.bsky.social or your-domain.com"
-              />
-            </div>
-            <div className="formGroup">
-              <label className="label" htmlFor="password">App password</label>
-              <input
-                id="password"
-                className="input"
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && signIn()}
-                placeholder="xxxx-xxxx-xxxx-xxxx"
+                disabled={!!agentRef.current}
               />
             </div>
             {!isOwner && (
@@ -112,17 +241,24 @@ export default function Home() {
                   onKeyDown={(e) => e.key === 'Enter' && signIn()}
                   placeholder="sk-ant-..."
                 />
+                <p className="hint" style={{ marginTop: '0.5rem' }}>
+                  Get your API key at{' '}
+                  <a href="https://platform.claude.com/settings/keys" target="_blank" rel="noopener noreferrer">
+                    console.anthropic.com
+                  </a>
+                  . You&apos;ll need an Anthropic account with API credits.
+                </p>
               </div>
             )}
             <button
               className="btn"
               onClick={signIn}
-              disabled={!handle.trim() || !password.trim() || (!isOwner && !apiKey.trim())}
+              disabled={!handle.trim() || (!isOwner && !apiKey.trim())}
             >
-              Summarize my feed
+              {agentRef.current ? 'Summarize my feed' : 'Sign in with Bluesky'}
             </button>
             <p className="hint">
-              Bluesky app password: Settings → Privacy &amp; Security → App Passwords
+              You&apos;ll be redirected to Bluesky to authorize access to your feed.
             </p>
           </div>
         )}
@@ -138,7 +274,7 @@ export default function Home() {
           <>
             <div className="resultsMeta">
               <span className="postCount">{state.postCount} posts · last 24 hours</span>
-              <button className="textBtn" onClick={reset}>Sign out</button>
+              <button className="textBtn" onClick={signOut}>Sign out</button>
             </div>
             <div className="summaryCard">
               <h2 className="summaryTitle">What&apos;s happening on your feed</h2>
@@ -146,14 +282,14 @@ export default function Home() {
                 <ReactMarkdown>{state.summary}</ReactMarkdown>
               </div>
             </div>
-            <button className="refreshBtn" onClick={signIn}>Refresh summary</button>
+            <button className="refreshBtn" onClick={refresh}>Refresh summary</button>
           </>
         )}
 
         {state.status === 'error' && (
           <div className="errorCard">
             <p className="errorMsg">{state.message}</p>
-            <button className="textBtn" onClick={reset}>Try again</button>
+            <button className="textBtn" onClick={signOut}>Try again</button>
           </div>
         )}
       </div>
@@ -161,7 +297,7 @@ export default function Home() {
   )
 }
 
-async function fetchLast24Hours(agent: import('@atproto/api').AtpAgent): Promise<string[]> {
+async function fetchLast24Hours(agent: import('@atproto/api').Agent): Promise<string[]> {
   const cutoffMs = Date.now() - 24 * 60 * 60 * 1000
   const posts: string[] = []
   let cursor: string | undefined
