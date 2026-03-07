@@ -7,6 +7,7 @@ type AppState =
   | { status: 'initializing' }
   | { status: 'login' }
   | { status: 'loading'; message: string }
+  | { status: 'streaming'; summary: string; postCount: number; handle: string }
   | { status: 'done'; summary: string; postCount: number; handle: string }
   | { status: 'error'; message: string }
 
@@ -140,7 +141,17 @@ export default function Home() {
         throw new Error(err.error ?? 'Summarization failed')
       }
 
-      const { summary } = await res.json()
+      const reader = res.body!.getReader()
+      const decoder = new TextDecoder()
+      let summary = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        summary += decoder.decode(value, { stream: true })
+        setState({ status: 'streaming', summary, postCount: posts.length, handle: userHandle })
+      }
+
       setState({ status: 'done', summary, postCount: posts.length, handle: userHandle })
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
@@ -184,7 +195,7 @@ export default function Home() {
   }
 
   async function refresh() {
-    if (!agentRef.current || state.status !== 'done') return
+    if (!agentRef.current || (state.status !== 'done' && state.status !== 'streaming')) return
     const storedKey = sessionStorage.getItem('zeitgeist_api_key')
     await fetchAndSummarize(agentRef.current, state.handle, storedKey || undefined)
   }
@@ -270,7 +281,7 @@ export default function Home() {
           </div>
         )}
 
-        {state.status === 'done' && (
+        {(state.status === 'streaming' || state.status === 'done') && (
           <>
             <div className="resultsMeta">
               <span className="postCount">{state.postCount} posts · last 24 hours</span>
@@ -281,8 +292,11 @@ export default function Home() {
               <div className="prose">
                 <ReactMarkdown>{state.summary}</ReactMarkdown>
               </div>
+              {state.status === 'streaming' && <div className="spinner" style={{ marginTop: '1rem' }} />}
             </div>
-            <button className="refreshBtn" onClick={refresh}>Refresh summary</button>
+            {state.status === 'done' && (
+              <button className="refreshBtn" onClick={refresh}>Refresh summary</button>
+            )}
           </>
         )}
 

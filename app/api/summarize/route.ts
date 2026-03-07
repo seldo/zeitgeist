@@ -31,7 +31,7 @@ export async function POST(request: NextRequest) {
     .map((p, i) => `[${i + 1}] ${p}`)
     .join('\n\n')
 
-  const message = await client.messages.create({
+  const stream = client.messages.stream({
     model: 'claude-sonnet-4-6',
     max_tokens: 2048,
     messages: [
@@ -47,8 +47,22 @@ ${postsText}`,
     ],
   })
 
-  const summary =
-    message.content[0].type === 'text' ? message.content[0].text : ''
+  const readableStream = new ReadableStream({
+    async start(controller) {
+      const encoder = new TextEncoder()
+      for await (const event of stream) {
+        if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
+          controller.enqueue(encoder.encode(event.delta.text))
+        }
+      }
+      controller.close()
+    },
+  })
 
-  return Response.json({ summary })
+  return new Response(readableStream, {
+    headers: {
+      'Content-Type': 'text/plain; charset=utf-8',
+      'Transfer-Encoding': 'chunked',
+    },
+  })
 }
