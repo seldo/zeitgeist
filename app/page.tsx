@@ -434,6 +434,29 @@ export default function Home() {
           </div>
         )}
 
+        {state.status === 'login' && platform === 'twitter' && (
+          <div className="embedWrap">
+            <blockquote
+              className="bluesky-embed"
+              data-bluesky-uri="at://did:plc:4w3lx5jmokfvihilz2q562ev/app.bsky.feed.post/3mgj5paspns25"
+              data-bluesky-cid="bafyreibpbex3xkzgg32rngynaiiz5upmeczptuqivpwl4bymtf5zffyrjq"
+              data-bluesky-embed-color-mode="system"
+            >
+              <p lang="en">
+                I extended Zeitgeist.Blue to handle Twitter feeds and the results were... predictable.
+                But if you want a summary instead of having to wade through nazis yourself, it&apos;s there now.
+              </p>
+              &mdash; Laurie Voss (
+              <a href="https://bsky.app/profile/did:plc:4w3lx5jmokfvihilz2q562ev?ref_src=embed">@seldo.com</a>
+              ){' '}
+              <a href="https://bsky.app/profile/did:plc:4w3lx5jmokfvihilz2q562ev/post/3mgj5paspns25?ref_src=embed">
+                March 7, 2026 at 5:07 PM
+              </a>
+            </blockquote>
+            <BlueskyEmbedScript />
+          </div>
+        )}
+
         {state.status === 'loading' && (
           <div className="loadingWrap">
             <div className="spinner" />
@@ -494,7 +517,15 @@ function saveCachedSummary(summary: string, postCount: number, handle: string, p
 
 function loadCachedSummary(platform: Platform): { summary: string; postCount: number; handle: string } | null {
   try {
-    const raw = localStorage.getItem(`zeitgeist_summary_${platform}`)
+    let raw = localStorage.getItem(`zeitgeist_summary_${platform}`)
+    // Migrate legacy cache key from before platform support was added
+    if (!raw && platform === 'bluesky') {
+      raw = localStorage.getItem('zeitgeist_summary')
+      if (raw) {
+        localStorage.setItem('zeitgeist_summary_bluesky', raw)
+        localStorage.removeItem('zeitgeist_summary')
+      }
+    }
     if (!raw) return null
     const data = JSON.parse(raw)
     if (Date.now() - data.timestamp > 24 * 60 * 60 * 1000) {
