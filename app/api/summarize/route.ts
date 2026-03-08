@@ -1,20 +1,25 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { NextRequest } from 'next/server'
 
-const OWNER_HANDLE = process.env.OWNER_HANDLE ?? 'seldo.com'
+const BLUESKY_OWNER_HANDLE = process.env.OWNER_HANDLE ?? 'seldo.com'
+const TWITTER_OWNER_HANDLE = process.env.TWITTER_OWNER_HANDLE ?? ''
 
 export async function POST(request: NextRequest) {
-  const { posts, handle, apiKey } = await request.json() as {
+  const { posts, handle, apiKey, source } = await request.json() as {
     posts: { text: string; url: string }[]
     handle: string
     apiKey?: string
+    source?: 'bluesky' | 'twitter'
   }
+
+  const feedSource = source || 'bluesky'
 
   if (!Array.isArray(posts) || posts.length === 0) {
     return Response.json({ error: 'No posts provided' }, { status: 400 })
   }
 
-  const isOwner = handle?.replace(/^@/, '') === OWNER_HANDLE
+  const ownerHandle = feedSource === 'twitter' ? TWITTER_OWNER_HANDLE : BLUESKY_OWNER_HANDLE
+  const isOwner = ownerHandle !== '' && handle?.replace(/^@/, '') === ownerHandle
   const keyToUse = isOwner ? process.env.ANTHROPIC_API_KEY : apiKey
 
   if (!keyToUse) {
@@ -37,9 +42,9 @@ export async function POST(request: NextRequest) {
     messages: [
       {
         role: 'user',
-        content: `Below are ${posts.length} posts from my Bluesky social feed over the last 24 hours. Each post includes its URL in parentheses. Please summarize what people are talking about.
+        content: `Below are ${posts.length} posts from my ${feedSource === 'twitter' ? 'Twitter/X' : 'Bluesky'} social feed over the last 24 hours. Each post includes its URL in parentheses. Please summarize what people are talking about.
 
-Organize your response by theme or topic. For each theme, give it a short bold heading, then 2–4 sentences describing what's being discussed and any notable perspectives or debates. Within your summary text, link a few key words or phrases to a representative post URL using markdown links — for example, "[some topic](https://bsky.app/...)". Pick just one representative post per topic. Do not use footnotes or reference numbers. End with a brief 1–2 sentence "overall vibe" of the feed.
+Organize your response by theme or topic. For each theme, give it a short bold heading, then 2–4 sentences describing what's being discussed and any notable perspectives or debates. Within your summary text, link a few key words or phrases to a representative post URL using markdown links — for example, "[some topic](${feedSource === 'twitter' ? 'https://x.com/...' : 'https://bsky.app/..'})". Pick just one representative post per topic. Do not use footnotes or reference numbers. End with a brief 1–2 sentence "overall vibe" of the feed.
 
 Posts:
 ${postsText}`,

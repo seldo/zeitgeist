@@ -84,6 +84,38 @@ body {
   margin: 0 0 1.5rem;
 }
 
+/* ===== PLATFORM TABS ===== */
+
+.platformTabs {
+  display: flex;
+  gap: 0;
+  margin-bottom: 1.5rem;
+  border-bottom: 1px solid var(--blue-dim);
+}
+
+.platformTab {
+  flex: 1;
+  padding: 0.6rem 1rem;
+  font-family: 'DM Mono', monospace;
+  font-size: 0.8rem;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  color: var(--ink-faint);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+  margin-bottom: -1px;
+}
+
+.platformTab:hover { color: var(--ink); }
+
+.platformTabActive {
+  color: var(--blue-dark);
+  border-bottom-color: var(--orange);
+}
+
 /* ===== FORM ===== */
 
 .formGroup {
