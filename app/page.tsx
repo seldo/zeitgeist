@@ -77,7 +77,7 @@ export default function Home() {
     }
   }
 
-  async function initOAuth() {
+  async function initOAuth(skipSessionRestore = false) {
     try {
       const { BrowserOAuthClient } = await import('@atproto/oauth-client-browser')
 
@@ -128,6 +128,11 @@ export default function Home() {
       })
 
       clientRef.current = client
+
+      if (skipSessionRestore) {
+        setState({ status: 'login' })
+        return
+      }
 
       const result = await client.init()
 
@@ -284,7 +289,8 @@ export default function Home() {
     setHandle('')
     setApiKey('')
     // Re-initialize OAuth client so Bluesky sign-in works without a page refresh
-    initOAuth()
+    // Skip session restore so it doesn't immediately sign back in
+    initOAuth(true)
   }
 
   const activePlatform = (state.status === 'done' || state.status === 'streaming') ? state.platform : platform
