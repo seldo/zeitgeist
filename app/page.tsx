@@ -93,8 +93,8 @@ export default function Home() {
         const profile = await agent.getProfile({ actor: result.session.did })
         const resolvedHandle = profile.data.handle
 
-        // Restore API key from sessionStorage (stored before OAuth redirect)
-        const storedKey = sessionStorage.getItem('zeitgeist_api_key')
+        // Restore API key from localStorage
+        const storedKey = localStorage.getItem('zeitgeist_api_key')
         const isOwnerSession = resolvedHandle === ownerHandle
 
         if (!isOwnerSession && !storedKey) {
@@ -104,9 +104,21 @@ export default function Home() {
           return
         }
 
-        await fetchAndSummarize(agent, resolvedHandle, storedKey || undefined)
+        // Show cached summary immediately if we have one
+        const cached = loadCachedSummary()
+        if (cached && cached.handle === resolvedHandle) {
+          setState({ status: 'done', ...cached })
+        } else {
+          await fetchAndSummarize(agent, resolvedHandle, storedKey || undefined)
+        }
       } else {
-        setState({ status: 'login' })
+        // No OAuth session — check if we have a cached summary to show anyway
+        const cached = loadCachedSummary()
+        if (cached) {
+          setState({ status: 'done', ...cached })
+        } else {
+          setState({ status: 'login' })
+        }
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
@@ -152,6 +164,7 @@ export default function Home() {
         setState({ status: 'streaming', summary, postCount: posts.length, handle: userHandle })
       }
 
+      saveCachedSummary(summary, posts.length, userHandle)
       setState({ status: 'done', summary, postCount: posts.length, handle: userHandle })
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
@@ -168,7 +181,7 @@ export default function Home() {
     if (agentRef.current) {
       if (!isOwner && !apiKey.trim()) return
       if (apiKey.trim()) {
-        sessionStorage.setItem('zeitgeist_api_key', apiKey.trim())
+        localStorage.setItem('zeitgeist_api_key', apiKey.trim())
       }
       await fetchAndSummarize(agentRef.current, trimmedHandle, apiKey.trim() || undefined)
       return
@@ -179,7 +192,7 @@ export default function Home() {
 
     // Store API key before redirect so we can retrieve it after
     if (apiKey.trim()) {
-      sessionStorage.setItem('zeitgeist_api_key', apiKey.trim())
+      localStorage.setItem('zeitgeist_api_key', apiKey.trim())
     }
 
     try {
@@ -196,12 +209,13 @@ export default function Home() {
 
   async function refresh() {
     if (!agentRef.current || (state.status !== 'done' && state.status !== 'streaming')) return
-    const storedKey = sessionStorage.getItem('zeitgeist_api_key')
+    const storedKey = localStorage.getItem('zeitgeist_api_key')
     await fetchAndSummarize(agentRef.current, state.handle, storedKey || undefined)
   }
 
   function signOut() {
-    sessionStorage.removeItem('zeitgeist_api_key')
+    localStorage.removeItem('zeitgeist_api_key')
+    localStorage.removeItem('zeitgeist_summary')
     agentRef.current = null
     clientRef.current = null
     setState({ status: 'login' })
@@ -311,9 +325,33 @@ export default function Home() {
   )
 }
 
-async function fetchLast24Hours(agent: import('@atproto/api').Agent): Promise<string[]> {
+function saveCachedSummary(summary: string, postCount: number, handle: string) {
+  localStorage.setItem('zeitgeist_summary', JSON.stringify({
+    summary, postCount, handle, timestamp: Date.now(),
+  }))
+}
+
+function loadCachedSummary(): { summary: string; postCount: number; handle: string } | null {
+  try {
+    const raw = localStorage.getItem('zeitgeist_summary')
+    if (!raw) return null
+    const data = JSON.parse(raw)
+    // Expire after 24 hours
+    if (Date.now() - data.timestamp > 24 * 60 * 60 * 1000) {
+      localStorage.removeItem('zeitgeist_summary')
+      return null
+    }
+    return { summary: data.summary, postCount: data.postCount, handle: data.handle }
+  } catch {
+    return null
+  }
+}
+
+type FeedPost = { text: string; url: string }
+
+async function fetchLast24Hours(agent: import('@atproto/api').Agent): Promise<FeedPost[]> {
   const cutoffMs = Date.now() - 24 * 60 * 60 * 1000
-  const posts: string[] = []
+  const posts: FeedPost[] = []
   let cursor: string | undefined
 
   while (true) {
@@ -331,7 +369,11 @@ async function fetchLast24Hours(agent: import('@atproto/api').Agent): Promise<st
       }
       const record = item.post.record as { text?: string }
       if (record.text?.trim()) {
-        posts.push(record.text.trim())
+        // Build bsky.app URL from the post URI (at://did/app.bsky.feed.post/rkey)
+        const rkey = item.post.uri.split('/').pop()
+        const authorHandle = item.post.author.handle
+        const url = `https://bsky.app/profile/${authorHandle}/post/${rkey}`
+        posts.push({ text: record.text.trim(), url })
       }
     }
 

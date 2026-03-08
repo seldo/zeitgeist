@@ -288,3 +288,20 @@ body {
   margin: 0 0 1rem;
   font-size: 0.95rem;
 }
+
+.siteFooter {
+  text-align: center;
+  padding: 2rem 1rem;
+  font-size: 0.85rem;
+  color: var(--ink-faint);
+}
+
+.siteFooter a {
+  color: var(--ink-faint);
+  text-decoration: none;
+}
+
+.siteFooter a:hover {
+  color: var(--blue);
+  text-decoration: underline;
+}
