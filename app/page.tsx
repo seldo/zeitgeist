@@ -15,7 +15,12 @@ type AppState =
 
 export default function Home() {
   const [state, setState] = useState<AppState>({ status: 'initializing' })
-  const [handle, setHandle] = useState('')
+  const [handle, setHandle] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('zeitgeist_bluesky_handle') || ''
+    }
+    return ''
+  })
   const [apiKey, setApiKey] = useState('')
   const [platform, setPlatform] = useState<Platform>('bluesky')
   const clientRef = useRef<import('@atproto/oauth-client-browser').BrowserOAuthClient | null>(null)
@@ -295,7 +300,7 @@ export default function Home() {
     // Clear Twitter cookies
     await fetch('/api/twitter/signout', { method: 'POST' }).catch(() => {})
     setState({ status: 'login' })
-    setHandle('')
+    setHandle(localStorage.getItem('zeitgeist_bluesky_handle') || '')
     setApiKey('')
     // Re-initialize OAuth client so Bluesky sign-in works without a page refresh
     // Skip session restore so it doesn't immediately sign back in
@@ -344,7 +349,10 @@ export default function Home() {
                     className="input"
                     type="text"
                     value={handle}
-                    onChange={(e) => setHandle(e.target.value)}
+                    onChange={(e) => {
+                      setHandle(e.target.value)
+                      localStorage.setItem('zeitgeist_bluesky_handle', e.target.value)
+                    }}
                     onKeyDown={(e) => e.key === 'Enter' && signInBluesky()}
                     placeholder="you.bsky.social or your-domain.com"
                     disabled={!!agentRef.current}
