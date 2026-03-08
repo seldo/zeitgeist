@@ -283,6 +283,8 @@ export default function Home() {
     setState({ status: 'login' })
     setHandle('')
     setApiKey('')
+    // Re-initialize OAuth client so Bluesky sign-in works without a page refresh
+    initOAuth()
   }
 
   const activePlatform = (state.status === 'done' || state.status === 'streaming') ? state.platform : platform
