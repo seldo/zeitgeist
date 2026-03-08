@@ -47,6 +47,13 @@ export default function Home() {
 
   async function handleTwitterSession() {
     try {
+      // Check cache first to avoid unnecessary API calls
+      const cached = loadCachedSummary('twitter')
+      if (cached) {
+        setState({ status: 'done', ...cached, platform: 'twitter' })
+        return
+      }
+
       setState({ status: 'loading', message: 'Fetching your Twitter feed...' })
 
       const storedKey = localStorage.getItem('zeitgeist_api_key')
@@ -272,6 +279,8 @@ export default function Home() {
     const storedKey = localStorage.getItem('zeitgeist_api_key')
 
     if (state.platform === 'twitter') {
+      // Clear cache so handleTwitterSession does a fresh fetch
+      localStorage.removeItem('zeitgeist_summary_twitter')
       await handleTwitterSession()
     } else {
       if (!agentRef.current) return
