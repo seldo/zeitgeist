@@ -8,8 +8,8 @@ Live at [zeitgeist.blue](https://zeitgeist.blue).
 
 1. You sign in via Bluesky OAuth (no passwords stored)
 2. Zeitgeist fetches up to 2,000 posts from your timeline over the last 24 hours
-3. The posts are sent to Claude (Sonnet), which organizes them by theme and summarizes the conversations
-4. You get a readable summary with an "overall vibe" of your feed
+3. The posts are sent to Claude (Sonnet), which organizes them by theme and summarizes the conversations, with inline links to representative posts
+4. The summary streams in live and is cached locally so you can revisit it without re-fetching
 
 ## BYOK (Bring Your Own Key)
 
