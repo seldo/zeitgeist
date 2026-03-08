@@ -305,3 +305,10 @@ body {
   color: var(--blue);
   text-decoration: underline;
 }
+
+.embedWrap {
+  margin-top: 2rem;
+  max-width: 550px;
+  margin-left: auto;
+  margin-right: auto;
+}

@@ -288,6 +288,29 @@ export default function Home() {
           </div>
         )}
 
+        {state.status === 'login' && (
+          <div className="embedWrap">
+            <blockquote
+              className="bluesky-embed"
+              data-bluesky-uri="at://did:plc:4w3lx5jmokfvihilz2q562ev/app.bsky.feed.post/3mggrm36nuc2w"
+              data-bluesky-cid="bafyreifcnvzgzqiua74ofnfzdwuctriwuyszudgy6ujncwske3v43jgc3e"
+              data-bluesky-embed-color-mode="system"
+            >
+              <p lang="en">
+                I wrote an app that reads the last 24 hours of my BlueSky feed and catches me up on
+                what everyone is talking about. This is actual output that I have not edited in any way.
+              </p>
+              &mdash; Laurie Voss (
+              <a href="https://bsky.app/profile/did:plc:4w3lx5jmokfvihilz2q562ev?ref_src=embed">@seldo.com</a>
+              ){' '}
+              <a href="https://bsky.app/profile/did:plc:4w3lx5jmokfvihilz2q562ev/post/3mggrm36nuc2w?ref_src=embed">
+                March 6, 2026 at 6:26 PM
+              </a>
+            </blockquote>
+            <BlueskyEmbedScript />
+          </div>
+        )}
+
         {state.status === 'loading' && (
           <div className="loadingWrap">
             <div className="spinner" />
@@ -323,6 +346,18 @@ export default function Home() {
       </div>
     </main>
   )
+}
+
+function BlueskyEmbedScript() {
+  useEffect(() => {
+    const script = document.createElement('script')
+    script.src = 'https://embed.bsky.app/static/embed.js'
+    script.async = true
+    script.charset = 'utf-8'
+    document.body.appendChild(script)
+    return () => { document.body.removeChild(script) }
+  }, [])
+  return null
 }
 
 function saveCachedSummary(summary: string, postCount: number, handle: string) {
