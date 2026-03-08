@@ -12,7 +12,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body>
         {children}
         <footer className="siteFooter">
-          <a href="https://github.com/seldo/zeitgeist" target="_blank" rel="noopener noreferrer">
+          Created by <a href="https://seldo.com">Laurie Voss</a> | <a href="https://github.com/seldo/zeitgeist" target="_blank" rel="noopener noreferrer">
             Open source on GitHub
           </a>
         </footer>
