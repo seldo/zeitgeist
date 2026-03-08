@@ -276,10 +276,6 @@ export default function Home() {
 
   async function signOut() {
     localStorage.removeItem('zeitgeist_api_key')
-    localStorage.removeItem('zeitgeist_summary_bluesky')
-    localStorage.removeItem('zeitgeist_summary_twitter')
-    // Also clear legacy key
-    localStorage.removeItem('zeitgeist_summary')
     agentRef.current = null
     clientRef.current = null
     // Clear Twitter cookies
