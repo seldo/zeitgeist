@@ -60,7 +60,15 @@ export default function Home() {
       // Clean up URL
       window.history.replaceState({}, '', '/')
       setPlatform('twitter')
-      handleTwitterSession()
+      // Auto-detect GitHub Copilot auth so we don't prompt for an Anthropic key
+      const ghUser = document.cookie.split('; ').find(c => c.startsWith('github_username='))?.split('=')[1]
+      let detectedProvider: LlmProvider = 'anthropic'
+      if (ghUser) {
+        setGithubUser(ghUser)
+        setLlmProvider('github-copilot')
+        detectedProvider = 'github-copilot'
+      }
+      handleTwitterSession(detectedProvider)
       return
     }
     if (params.get('twitter_error')) {
@@ -74,7 +82,7 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  async function handleTwitterSession() {
+  async function handleTwitterSession(providerOverride?: LlmProvider) {
     try {
       // Check cache first to avoid unnecessary API calls
       const cached = loadCachedSummary('twitter')
@@ -106,7 +114,7 @@ export default function Home() {
       const twitterHandle = username
       const keyToUse = storedKey || undefined
 
-      await streamSummary(posts, twitterHandle, 'twitter', keyToUse, llmProvider)
+      await streamSummary(posts, twitterHandle, 'twitter', keyToUse, providerOverride ?? llmProvider)
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
       setState({ status: 'error', message: msg })
@@ -117,10 +125,15 @@ export default function Home() {
     try {
       const { BrowserOAuthClient } = await import('@atproto/oauth-client-browser')
 
+      // RFC 8252 requires loopback IP (127.0.0.1) instead of "localhost"
+      if (window.location.hostname === 'localhost') {
+        window.location.hostname = '127.0.0.1'
+        return
+      }
+
       const origin = window.location.origin
       const redirectUri = `${origin}/`
-      const isLocalhost = window.location.hostname === 'localhost'
-        || window.location.hostname === '127.0.0.1'
+      const isLocalhost = window.location.hostname === '127.0.0.1'
 
       let clientId: string
 
@@ -193,11 +206,16 @@ export default function Home() {
           }
         }
 
+        // Auto-detect LLM provider based on auth state
+        const hasGithubAuth = !!document.cookie.split('; ').find(c => c.startsWith('github_username='))
+        const detectedProvider: LlmProvider = hasGithubAuth ? 'github-copilot' : 'anthropic'
+        if (hasGithubAuth) setLlmProvider('github-copilot')
+
         const cached = loadCachedSummary('bluesky')
         if (cached && cached.handle === resolvedHandle) {
           setState({ status: 'done', ...cached, platform: 'bluesky' })
         } else {
-          await fetchAndSummarizeBluesky(agent, resolvedHandle, storedKey || undefined)
+          await fetchAndSummarizeBluesky(agent, resolvedHandle, storedKey || undefined, detectedProvider)
         }
       } else {
         const cached = loadCachedSummary('bluesky') || loadCachedSummary('twitter')

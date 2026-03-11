@@ -27,7 +27,7 @@ export async function GET(request: NextRequest) {
     const posts: { text: string; url: string }[] = []
     let paginationToken: string | undefined
 
-    while (posts.length < 2000) {
+    while (posts.length < 100) {
       const params = new URLSearchParams({
         max_results: '100',
         'tweet.fields': 'created_at,author_id',
