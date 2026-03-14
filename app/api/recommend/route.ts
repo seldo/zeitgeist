@@ -2,20 +2,25 @@ import Anthropic from '@anthropic-ai/sdk'
 import { NextRequest } from 'next/server'
 
 const BLUESKY_OWNER_HANDLE = process.env.OWNER_HANDLE ?? 'seldo.com'
+const TWITTER_OWNER_HANDLE = process.env.TWITTER_OWNER_HANDLE ?? ''
 
 export async function POST(request: NextRequest) {
-  const { userPosts, feedPosts, handle, apiKey } = await request.json() as {
+  const { userPosts, feedPosts, handle, apiKey, source } = await request.json() as {
     userPosts: { text: string; url: string }[]
     feedPosts: { text: string; url: string }[]
     handle: string
     apiKey?: string
+    source?: 'bluesky' | 'twitter'
   }
+
+  const feedSource = source || 'bluesky'
 
   if (!Array.isArray(userPosts) || !Array.isArray(feedPosts) || feedPosts.length === 0) {
     return Response.json({ error: 'Missing posts data' }, { status: 400 })
   }
 
-  const isOwner = BLUESKY_OWNER_HANDLE !== '' && handle?.replace(/^@/, '') === BLUESKY_OWNER_HANDLE
+  const ownerHandle = feedSource === 'twitter' ? TWITTER_OWNER_HANDLE : BLUESKY_OWNER_HANDLE
+  const isOwner = ownerHandle !== '' && handle?.replace(/^@/, '') === ownerHandle
   const keyToUse = isOwner ? process.env.ANTHROPIC_API_KEY : apiKey
 
   if (!keyToUse) {
@@ -43,7 +48,7 @@ export async function POST(request: NextRequest) {
     messages: [
       {
         role: 'user',
-        content: `I'm going to give you two sets of posts. The first set is the user's own recent Bluesky posts — these represent topics they've been thinking about, their interests, and their perspectives. The second set is posts from the user's feed over the last 24 hours.
+        content: `I'm going to give you two sets of posts. The first set is the user's own recent ${feedSource === 'twitter' ? 'Twitter/X' : 'Bluesky'} posts — these represent topics they've been thinking about, their interests, and their perspectives. The second set is posts from the user's feed over the last 24 hours.
 
 Based on what the user has been posting about, pick exactly 10 posts from their feed that they would most likely want to interact with — posts that are relevant to their interests, that they might want to reply to, like, or repost. Prefer posts that are conversation starters or that intersect with the user's demonstrated interests.
 

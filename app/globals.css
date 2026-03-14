@@ -371,6 +371,7 @@ body {
   margin: 0 0 0.5rem;
 }
 
-.blueskyEmbedContainer {
+.blueskyEmbedContainer,
+.twitterEmbedContainer {
   max-width: 550px;
 }

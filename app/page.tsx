@@ -38,13 +38,13 @@ export default function Home() {
   const ownerHandle = process.env.NEXT_PUBLIC_OWNER_HANDLE ?? 'seldo.com'
   const isOwner = handle.trim().replace(/^@/, '') === ownerHandle
 
-  function loadCachedRecommendations() {
+  function loadCachedRecommendations(plat: Platform = 'bluesky') {
     try {
-      const raw = localStorage.getItem('zeitgeist_recommendations_bluesky')
+      const raw = localStorage.getItem(`zeitgeist_recommendations_${plat}`)
       if (!raw) return
       const data = JSON.parse(raw)
       if (Date.now() - data.timestamp > 24 * 60 * 60 * 1000) {
-        localStorage.removeItem('zeitgeist_recommendations_bluesky')
+        localStorage.removeItem(`zeitgeist_recommendations_${plat}`)
         return
       }
       setRecommendations(data.recommendations || [])
@@ -111,9 +111,11 @@ export default function Home() {
       const cached = loadCachedSummary('twitter')
       if (cached) {
         setState({ status: 'done', ...cached, platform: 'twitter' })
+        loadCachedRecommendations('twitter')
         return
       }
 
+      setRecommendations([])
       setState({ status: 'loading', message: 'Fetching your Twitter feed...' })
 
       const storedKey = localStorage.getItem('zeitgeist_api_key')
@@ -138,9 +140,62 @@ export default function Home() {
       const keyToUse = storedKey || undefined
 
       await streamSummary(posts, twitterHandle, 'twitter', keyToUse, providerOverride ?? llmProvider)
+
+      // After summary, fetch recommendations in the background
+      fetchTwitterRecommendations(posts, twitterHandle, keyToUse)
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
       setState({ status: 'error', message: msg })
+    }
+  }
+
+  async function fetchTwitterRecommendations(
+    feedPosts: FeedPost[],
+    userHandle: string,
+    key?: string,
+  ) {
+    try {
+      setRecsLoading(true)
+
+      const userPostsRes = await fetch('/api/twitter/user-posts')
+      if (!userPostsRes.ok) {
+        setRecsLoading(false)
+        return
+      }
+      const { posts: userPosts } = await userPostsRes.json()
+      if (!userPosts || userPosts.length === 0) {
+        setRecsLoading(false)
+        return
+      }
+
+      const res = await fetch('/api/recommend', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userPosts,
+          feedPosts,
+          handle: userHandle,
+          apiKey: key,
+          source: 'twitter',
+        }),
+      })
+
+      if (!res.ok) {
+        setRecsLoading(false)
+        return
+      }
+
+      const { recommendations: recs } = await res.json()
+      const recsData = recs || []
+      setRecommendations(recsData)
+      localStorage.setItem('zeitgeist_recommendations_twitter', JSON.stringify({
+        recommendations: recsData,
+        timestamp: Date.now(),
+      }))
+    } catch {
+      // Silently fail
+    } finally {
+      setRecsLoading(false)
     }
   }
 
@@ -415,6 +470,7 @@ export default function Home() {
   async function signOut() {
     localStorage.removeItem('zeitgeist_api_key')
     localStorage.removeItem('zeitgeist_recommendations_bluesky')
+    localStorage.removeItem('zeitgeist_recommendations_twitter')
     setRecommendations([])
     agentRef.current = null
     clientRef.current = null
@@ -440,8 +496,10 @@ export default function Home() {
     const cached = loadCachedSummary(target)
     if (cached) {
       setState({ status: 'done', ...cached, platform: target })
+      loadCachedRecommendations(target)
       return
     }
+    setRecommendations([])
 
     if (target === 'twitter') {
       if (!twitterAuthed) {
@@ -749,7 +807,7 @@ export default function Home() {
             {state.status === 'done' && (
               <button className="refreshBtn" onClick={refresh}>Refresh summary</button>
             )}
-            {activePlatform === 'bluesky' && (recsLoading || recommendations.length > 0) && (
+            {(recsLoading || recommendations.length > 0) && (
               <div className="recsSection">
                 <h2 className="recsTitle">Posts you might want to interact with</h2>
                 {recsLoading && (
@@ -761,7 +819,11 @@ export default function Home() {
                 {recommendations.map((rec, i) => (
                   <div key={i} className="recItem">
                     <p className="recReason">{rec.reason}</p>
-                    <BlueskyEmbed url={rec.url} />
+                    {activePlatform === 'bluesky' ? (
+                      <BlueskyEmbed url={rec.url} />
+                    ) : (
+                      <TwitterEmbed url={rec.url} />
+                    )}
                   </div>
                 ))}
               </div>
@@ -819,6 +881,36 @@ function BlueskyEmbed({ url }: { url: string }) {
 
   if (!embedHtml) return null
   return <div ref={containerRef} className="blueskyEmbedContainer" dangerouslySetInnerHTML={{ __html: embedHtml }} />
+}
+
+function TwitterEmbed({ url }: { url: string }) {
+  const [embedHtml, setEmbedHtml] = useState('')
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    fetch(`/api/oembed?url=${encodeURIComponent(url)}`)
+      .then(res => res.json())
+      .then(data => setEmbedHtml(data.html || ''))
+      .catch(() => {})
+  }, [url])
+
+  useEffect(() => {
+    if (!embedHtml || !containerRef.current) return
+    // Use Twitter's widgets.js to render the blockquote into an embed
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const win = window as any
+    if (win.twttr) {
+      win.twttr.widgets.load(containerRef.current)
+    } else {
+      const script = document.createElement('script')
+      script.src = 'https://platform.twitter.com/widgets.js'
+      script.async = true
+      containerRef.current.appendChild(script)
+    }
+  }, [embedHtml])
+
+  if (!embedHtml) return null
+  return <div ref={containerRef} className="twitterEmbedContainer" dangerouslySetInnerHTML={{ __html: embedHtml }} />
 }
 
 function saveCachedSummary(summary: string, postCount: number, handle: string, platform: Platform) {
