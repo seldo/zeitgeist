@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 
 type Platform = 'bluesky' | 'twitter'
+type LlmProvider = 'anthropic' | 'github-copilot'
 
 type AppState =
   | { status: 'initializing' }
@@ -23,6 +24,8 @@ export default function Home() {
   })
   const [apiKey, setApiKey] = useState('')
   const [platform, setPlatform] = useState<Platform>('bluesky')
+  const [llmProvider, setLlmProvider] = useState<LlmProvider>('anthropic')
+  const [githubUser, setGithubUser] = useState<string | null>(null)
   const clientRef = useRef<import('@atproto/oauth-client-browser').BrowserOAuthClient | null>(null)
   const agentRef = useRef<import('@atproto/api').Agent | null>(null)
 
@@ -30,13 +33,42 @@ export default function Home() {
   const isOwner = handle.trim().replace(/^@/, '') === ownerHandle
 
   useEffect(() => {
+    // Check GitHub username cookie
+    const ghUser = document.cookie.split('; ').find(c => c.startsWith('github_username='))?.split('=')[1]
+    if (ghUser) setGithubUser(ghUser)
+  }, [])
+
+  useEffect(() => {
     // Check for Twitter OAuth callback
     const params = new URLSearchParams(window.location.search)
+    if (params.get('github_auth') === 'success') {
+      window.history.replaceState({}, '', '/')
+      setLlmProvider('github-copilot')
+      const ghUser = document.cookie.split('; ').find(c => c.startsWith('github_username='))?.split('=')[1]
+      if (ghUser) setGithubUser(ghUser)
+      setState({ status: 'login' })
+      initOAuth(true)
+      return
+    }
+    if (params.get('github_error')) {
+      const error = params.get('github_error')!
+      window.history.replaceState({}, '', '/')
+      setState({ status: 'error', message: `GitHub auth failed: ${error}` })
+      return
+    }
     if (params.get('twitter_auth') === 'success') {
       // Clean up URL
       window.history.replaceState({}, '', '/')
       setPlatform('twitter')
-      handleTwitterSession()
+      // Auto-detect GitHub Copilot auth so we don't prompt for an Anthropic key
+      const ghUser = document.cookie.split('; ').find(c => c.startsWith('github_username='))?.split('=')[1]
+      let detectedProvider: LlmProvider = 'anthropic'
+      if (ghUser) {
+        setGithubUser(ghUser)
+        setLlmProvider('github-copilot')
+        detectedProvider = 'github-copilot'
+      }
+      handleTwitterSession(detectedProvider)
       return
     }
     if (params.get('twitter_error')) {
@@ -50,7 +82,7 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  async function handleTwitterSession() {
+  async function handleTwitterSession(providerOverride?: LlmProvider) {
     try {
       // Check cache first to avoid unnecessary API calls
       const cached = loadCachedSummary('twitter')
@@ -82,7 +114,7 @@ export default function Home() {
       const twitterHandle = username
       const keyToUse = storedKey || undefined
 
-      await streamSummary(posts, twitterHandle, 'twitter', keyToUse)
+      await streamSummary(posts, twitterHandle, 'twitter', keyToUse, providerOverride ?? llmProvider)
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
       setState({ status: 'error', message: msg })
@@ -93,10 +125,15 @@ export default function Home() {
     try {
       const { BrowserOAuthClient } = await import('@atproto/oauth-client-browser')
 
+      // RFC 8252 requires loopback IP (127.0.0.1) instead of "localhost"
+      if (window.location.hostname === 'localhost') {
+        window.location.hostname = '127.0.0.1'
+        return
+      }
+
       const origin = window.location.origin
       const redirectUri = `${origin}/`
-      const isLocalhost = window.location.hostname === 'localhost'
-        || window.location.hostname === '127.0.0.1'
+      const isLocalhost = window.location.hostname === '127.0.0.1'
 
       let clientId: string
 
@@ -160,16 +197,25 @@ export default function Home() {
         const isOwnerSession = resolvedHandle === ownerHandle
 
         if (!isOwnerSession && !storedKey) {
-          setState({ status: 'login' })
-          setHandle(resolvedHandle)
-          return
+          // If user has GitHub Copilot auth, they don't need an Anthropic key
+          const hasGithubAuth = !!document.cookie.split('; ').find(c => c.startsWith('github_username='))
+          if (!hasGithubAuth) {
+            setState({ status: 'login' })
+            setHandle(resolvedHandle)
+            return
+          }
         }
+
+        // Auto-detect LLM provider based on auth state
+        const hasGithubAuth = !!document.cookie.split('; ').find(c => c.startsWith('github_username='))
+        const detectedProvider: LlmProvider = hasGithubAuth ? 'github-copilot' : 'anthropic'
+        if (hasGithubAuth) setLlmProvider('github-copilot')
 
         const cached = loadCachedSummary('bluesky')
         if (cached && cached.handle === resolvedHandle) {
           setState({ status: 'done', ...cached, platform: 'bluesky' })
         } else {
-          await fetchAndSummarizeBluesky(agent, resolvedHandle, storedKey || undefined)
+          await fetchAndSummarizeBluesky(agent, resolvedHandle, storedKey || undefined, detectedProvider)
         }
       } else {
         const cached = loadCachedSummary('bluesky') || loadCachedSummary('twitter')
@@ -191,8 +237,10 @@ export default function Home() {
     userHandle: string,
     source: Platform,
     key?: string,
+    provider: LlmProvider = 'anthropic',
   ) {
-    const res = await fetch('/api/summarize', {
+    const endpoint = provider === 'github-copilot' ? '/api/summarize-github' : '/api/summarize'
+    const res = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ posts, handle: userHandle, apiKey: key, source }),
@@ -221,7 +269,8 @@ export default function Home() {
   async function fetchAndSummarizeBluesky(
     agent: import('@atproto/api').Agent,
     userHandle: string,
-    key?: string
+    key?: string,
+    provider: LlmProvider = 'anthropic',
   ) {
     try {
       setState({ status: 'loading', message: 'Fetching your feed...' })
@@ -233,7 +282,7 @@ export default function Home() {
       }
 
       setState({ status: 'loading', message: `Summarizing ${posts.length} posts...` })
-      await streamSummary(posts, userHandle, 'bluesky', key)
+      await streamSummary(posts, userHandle, 'bluesky', key, provider)
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
       setState({ status: 'error', message: msg })
@@ -245,15 +294,15 @@ export default function Home() {
     if (!trimmedHandle) return
 
     if (agentRef.current) {
-      if (!isOwner && !apiKey.trim()) return
+      if (!isOwner && llmProvider === 'anthropic' && !apiKey.trim()) return
       if (apiKey.trim()) {
         localStorage.setItem('zeitgeist_api_key', apiKey.trim())
       }
-      await fetchAndSummarizeBluesky(agentRef.current, trimmedHandle, apiKey.trim() || undefined)
+      await fetchAndSummarizeBluesky(agentRef.current, trimmedHandle, apiKey.trim() || undefined, llmProvider)
       return
     }
 
-    if (!isOwner && !apiKey.trim()) return
+    if (!isOwner && llmProvider === 'anthropic' && !apiKey.trim()) return
 
     if (apiKey.trim()) {
       localStorage.setItem('zeitgeist_api_key', apiKey.trim())
@@ -289,7 +338,7 @@ export default function Home() {
       await handleTwitterSession()
     } else {
       if (!agentRef.current) return
-      await fetchAndSummarizeBluesky(agentRef.current, state.handle, storedKey || undefined)
+      await fetchAndSummarizeBluesky(agentRef.current, state.handle, storedKey || undefined, llmProvider)
     }
   }
 
@@ -299,6 +348,10 @@ export default function Home() {
     clientRef.current = null
     // Clear Twitter cookies
     await fetch('/api/twitter/signout', { method: 'POST' }).catch(() => {})
+    // Clear GitHub cookies
+    await fetch('/api/github/signout', { method: 'POST' }).catch(() => {})
+    setGithubUser(null)
+    setLlmProvider('anthropic')
     setState({ status: 'login' })
     setHandle(localStorage.getItem('zeitgeist_bluesky_handle') || '')
     setApiKey('')
@@ -313,7 +366,7 @@ export default function Home() {
     <main className="page">
       <div className="inner">
         <h1 className="siteTitle">Zeitgeist</h1>
-        <p className="siteSubtitle">24-hour feed summary, powered by Claude</p>
+        <p className="siteSubtitle">24-hour feed summary, powered by AI</p>
 
         {state.status === 'initializing' && (
           <div className="loadingWrap">
@@ -358,7 +411,24 @@ export default function Home() {
                     disabled={!!agentRef.current}
                   />
                 </div>
-                {!isOwner && (
+                <div className="formGroup">
+                  <label className="label">LLM Provider</label>
+                  <div className="platformTabs" style={{ marginBottom: '0.5rem' }}>
+                    <button
+                      className={`platformTab ${llmProvider === 'anthropic' ? 'platformTabActive' : ''}`}
+                      onClick={() => setLlmProvider('anthropic')}
+                    >
+                      Anthropic
+                    </button>
+                    <button
+                      className={`platformTab ${llmProvider === 'github-copilot' ? 'platformTabActive' : ''}`}
+                      onClick={() => setLlmProvider('github-copilot')}
+                    >
+                      GitHub Copilot
+                    </button>
+                  </div>
+                </div>
+                {llmProvider === 'anthropic' && !isOwner && (
                   <div className="formGroup">
                     <label className="label" htmlFor="apiKey">
                       Anthropic API key
@@ -381,10 +451,30 @@ export default function Home() {
                     </p>
                   </div>
                 )}
+                {llmProvider === 'github-copilot' && !githubUser && (
+                  <div className="formGroup">
+                    <button
+                      className="btn"
+                      onClick={() => {
+                        window.location.href = `/api/github/auth?origin=${encodeURIComponent(window.location.origin)}`
+                      }}
+                    >
+                      Sign in with GitHub
+                    </button>
+                    <p className="hint" style={{ marginTop: '0.5rem' }}>
+                      Requires a GitHub Copilot subscription. No API key needed.
+                    </p>
+                  </div>
+                )}
+                {llmProvider === 'github-copilot' && githubUser && (
+                  <p className="hint" style={{ marginBottom: '0.5rem' }}>
+                    Signed in to GitHub as <strong>{githubUser}</strong>
+                  </p>
+                )}
                 <button
                   className="btn"
                   onClick={signInBluesky}
-                  disabled={!handle.trim() || (!isOwner && !apiKey.trim())}
+                  disabled={!handle.trim() || (llmProvider === 'anthropic' && !isOwner && !apiKey.trim()) || (llmProvider === 'github-copilot' && !githubUser)}
                 >
                   {agentRef.current ? 'Summarize my feed' : 'Sign in with Bluesky'}
                 </button>
@@ -398,26 +488,65 @@ export default function Home() {
               <>
                 <h2 className="cardTitle">Sign in with Twitter / X</h2>
                 <div className="formGroup">
-                  <label className="label" htmlFor="apiKey">
-                    Anthropic API key
-                  </label>
-                  <input
-                    id="apiKey"
-                    className="input"
-                    type="password"
-                    value={apiKey}
-                    onChange={(e) => setApiKey(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && signInTwitter()}
-                    placeholder="sk-ant-..."
-                  />
-                  <p className="hint" style={{ marginTop: '0.5rem' }}>
-                    Get your API key from{' '}
-                    <a href="https://platform.claude.com/settings/keys" target="_blank" rel="noopener noreferrer">
-                      Anthropic&apos;s console
-                    </a>
-                    . You&apos;ll need an Anthropic account with API credits.
-                  </p>
+                  <label className="label">LLM Provider</label>
+                  <div className="platformTabs" style={{ marginBottom: '0.5rem' }}>
+                    <button
+                      className={`platformTab ${llmProvider === 'anthropic' ? 'platformTabActive' : ''}`}
+                      onClick={() => setLlmProvider('anthropic')}
+                    >
+                      Anthropic
+                    </button>
+                    <button
+                      className={`platformTab ${llmProvider === 'github-copilot' ? 'platformTabActive' : ''}`}
+                      onClick={() => setLlmProvider('github-copilot')}
+                    >
+                      GitHub Copilot
+                    </button>
+                  </div>
                 </div>
+                {llmProvider === 'anthropic' && (
+                  <div className="formGroup">
+                    <label className="label" htmlFor="apiKey">
+                      Anthropic API key
+                    </label>
+                    <input
+                      id="apiKey"
+                      className="input"
+                      type="password"
+                      value={apiKey}
+                      onChange={(e) => setApiKey(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && signInTwitter()}
+                      placeholder="sk-ant-..."
+                    />
+                    <p className="hint" style={{ marginTop: '0.5rem' }}>
+                      Get your API key from{' '}
+                      <a href="https://platform.claude.com/settings/keys" target="_blank" rel="noopener noreferrer">
+                        Anthropic&apos;s console
+                      </a>
+                      . You&apos;ll need an Anthropic account with API credits.
+                    </p>
+                  </div>
+                )}
+                {llmProvider === 'github-copilot' && !githubUser && (
+                  <div className="formGroup">
+                    <button
+                      className="btn"
+                      onClick={() => {
+                        window.location.href = `/api/github/auth?origin=${encodeURIComponent(window.location.origin)}`
+                      }}
+                    >
+                      Sign in with GitHub
+                    </button>
+                    <p className="hint" style={{ marginTop: '0.5rem' }}>
+                      Requires a GitHub Copilot subscription. No API key needed.
+                    </p>
+                  </div>
+                )}
+                {llmProvider === 'github-copilot' && githubUser && (
+                  <p className="hint" style={{ marginBottom: '0.5rem' }}>
+                    Signed in to GitHub as <strong>{githubUser}</strong>
+                  </p>
+                )}
                 <button
                   className="btn"
                   onClick={signInTwitter}
