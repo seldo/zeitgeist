@@ -19,12 +19,20 @@ export async function POST(request: NextRequest) {
     return Response.json({ error: 'No posts provided' }, { status: 400 })
   }
 
-  const postsText = posts
+  // Copilot has a 64k token context limit. Reserve ~4k tokens for the prompt
+  // template and response, leaving ~60k tokens for posts (~4 chars per token).
+  const maxChars = 60000 * 4
+  const allFormatted = posts
     .slice(0, 2000)
     .map((p, i) => `[${i + 1}] ${p.text} (${p.url})`)
-    .join('\n\n')
+  let postsText = ''
+  for (const entry of allFormatted) {
+    if (postsText.length + entry.length + 2 > maxChars) break
+    postsText += (postsText ? '\n\n' : '') + entry
+  }
+  const includedCount = postsText.split('\n\n').length
 
-  const prompt = `Below are ${posts.length} posts from my ${feedSource === 'twitter' ? 'Twitter/X' : 'Bluesky'} social feed over the last 24 hours. Each post includes its URL in parentheses. Please summarize what people are talking about.
+  const prompt = `Below are ${includedCount} posts from my ${feedSource === 'twitter' ? 'Twitter/X' : 'Bluesky'} social feed over the last 24 hours. Each post includes its URL in parentheses. Please summarize what people are talking about.
 
 Organize your response by theme or topic. For each theme, give it a short bold heading, then 2–4 sentences describing what's being discussed and any notable perspectives or debates. Within your summary text, link a few key words or phrases to a representative post URL using markdown links — for example, "[some topic](${feedSource === 'twitter' ? 'https://x.com/...' : 'https://bsky.app/..'})". Pick just one representative post per topic. Do not use footnotes or reference numbers. End with a brief 1–2 sentence "overall vibe" of the feed.
 
