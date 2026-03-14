@@ -30,9 +30,9 @@ export default function Home() {
   const [githubUser, setGithubUser] = useState<string | null>(null)
   const [twitterAuthed, setTwitterAuthed] = useState(false)
   const [mastodonAuthed, setMastodonAuthed] = useState(false)
-  const [mastodonInstance, setMastodonInstance] = useState(() => {
+  const [mastodonHandle, setMastodonHandle] = useState(() => {
     if (typeof window !== 'undefined') {
-      return localStorage.getItem('zeitgeist_mastodon_instance') || ''
+      return localStorage.getItem('zeitgeist_mastodon_handle') || ''
     }
     return ''
   })
@@ -43,7 +43,9 @@ export default function Home() {
   const agentRef = useRef<import('@atproto/api').Agent | null>(null)
 
   const ownerHandle = process.env.NEXT_PUBLIC_OWNER_HANDLE ?? 'seldo.com'
+  const mastodonOwnerHandle = process.env.NEXT_PUBLIC_MASTODON_OWNER_HANDLE ?? ''
   const isOwner = handle.trim().replace(/^@/, '') === ownerHandle
+  const isMastodonOwner = mastodonOwnerHandle !== '' && mastodonHandle.trim().replace(/^@/, '') === mastodonOwnerHandle
 
   function loadCachedRecommendations(plat: Platform = 'bluesky') {
     try {
@@ -572,13 +574,20 @@ export default function Home() {
     window.location.href = `/api/twitter/auth?origin=${encodeURIComponent(window.location.origin)}`
   }
 
+  function parseMastodonInstance(h: string): string | null {
+    // Handle format: @user@instance or user@instance
+    const match = h.trim().replace(/^@/, '').match(/@(.+)$/)
+    return match ? match[1] : null
+  }
+
   async function signInMastodon() {
-    if (!mastodonInstance.trim()) return
+    const instance = parseMastodonInstance(mastodonHandle)
+    if (!instance) return
     if (apiKey.trim()) {
       localStorage.setItem('zeitgeist_api_key', apiKey.trim())
     }
-    localStorage.setItem('zeitgeist_mastodon_instance', mastodonInstance.trim())
-    window.location.href = `/api/mastodon/auth?origin=${encodeURIComponent(window.location.origin)}&instance=${encodeURIComponent(mastodonInstance.trim())}`
+    localStorage.setItem('zeitgeist_mastodon_handle', mastodonHandle.trim())
+    window.location.href = `/api/mastodon/auth?origin=${encodeURIComponent(window.location.origin)}&instance=${encodeURIComponent(instance)}`
   }
 
   async function refresh() {
@@ -866,18 +875,18 @@ export default function Home() {
               <>
                 <h2 className="cardTitle">Sign in with Mastodon</h2>
                 <div className="formGroup">
-                  <label className="label" htmlFor="mastodonInstance">Instance</label>
+                  <label className="label" htmlFor="mastodonHandle">Handle</label>
                   <input
-                    id="mastodonInstance"
+                    id="mastodonHandle"
                     className="input"
                     type="text"
-                    value={mastodonInstance}
+                    value={mastodonHandle}
                     onChange={(e) => {
-                      setMastodonInstance(e.target.value)
-                      localStorage.setItem('zeitgeist_mastodon_instance', e.target.value)
+                      setMastodonHandle(e.target.value)
+                      localStorage.setItem('zeitgeist_mastodon_handle', e.target.value)
                     }}
                     onKeyDown={(e) => e.key === 'Enter' && signInMastodon()}
-                    placeholder="mastodon.social, hachyderm.io, etc."
+                    placeholder="@you@mastodon.social"
                   />
                   <p className="hint" style={{ marginTop: '0.5rem' }}>
                     Also works with compatible servers (Pleroma, GoToSocial, etc.)
@@ -900,7 +909,7 @@ export default function Home() {
                     </button>
                   </div>
                 </div>
-                {llmProvider === 'anthropic' && (
+                {llmProvider === 'anthropic' && !isMastodonOwner && (
                   <div className="formGroup">
                     <label className="label" htmlFor="apiKey">
                       Anthropic API key
@@ -946,7 +955,7 @@ export default function Home() {
                 <button
                   className="btn"
                   onClick={signInMastodon}
-                  disabled={!mastodonInstance.trim() || (llmProvider === 'anthropic' && !apiKey.trim()) || (llmProvider === 'github-copilot' && !githubUser)}
+                  disabled={!parseMastodonInstance(mastodonHandle) || (llmProvider === 'anthropic' && !isMastodonOwner && !apiKey.trim()) || (llmProvider === 'github-copilot' && !githubUser)}
                 >
                   Sign in with Mastodon
                 </button>
@@ -1161,18 +1170,35 @@ function TwitterEmbed({ url }: { url: string }) {
 }
 
 function MastodonEmbed({ url }: { url: string }) {
-  const [embedHtml, setEmbedHtml] = useState('')
+  const iframeRef = useRef<HTMLIFrameElement>(null)
 
   useEffect(() => {
-    fetch(`/api/oembed?url=${encodeURIComponent(url)}`)
-      .then(res => res.json())
-      .then(data => setEmbedHtml(data.html || ''))
-      .catch(() => {})
+    // Listen for resize messages from the Mastodon embed iframe
+    const handleMessage = (event: MessageEvent) => {
+      if (!iframeRef.current) return
+      // Mastodon embed.js sends height via postMessage
+      if (typeof event.data === 'object' && event.data.type === 'setHeight' && event.data.id === `mastodon-embed-${url}`) {
+        iframeRef.current.height = `${event.data.height}px`
+      }
+    }
+    window.addEventListener('message', handleMessage)
+    return () => window.removeEventListener('message', handleMessage)
   }, [url])
 
-  if (!embedHtml) return null
-  // Mastodon oEmbed returns an iframe directly — no extra script needed
-  return <div className="mastodonEmbedContainer" dangerouslySetInnerHTML={{ __html: embedHtml }} />
+  // Mastodon supports a standard embed URL pattern: {post_url}/embed
+  return (
+    <div className="mastodonEmbedContainer">
+      <iframe
+        ref={iframeRef}
+        src={`${url}/embed`}
+        className="mastodon-embed"
+        style={{ maxWidth: '100%', border: 'none' }}
+        width="100%"
+        height="300"
+        allowFullScreen
+      />
+    </div>
+  )
 }
 
 function saveCachedSummary(summary: string, postCount: number, handle: string, platform: Platform) {

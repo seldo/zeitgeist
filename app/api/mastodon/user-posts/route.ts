@@ -34,7 +34,7 @@ export async function GET(request: NextRequest) {
 
     const meData = await meRes.json()
     const accountId = meData.id
-    const username = meData.acct || meData.username
+    const username = `${meData.username}@${instance}`
 
     const posts: { text: string; url: string }[] = []
     let maxId: string | undefined

@@ -36,7 +36,8 @@ export async function GET(request: NextRequest) {
     }
 
     const meData = await meRes.json()
-    const username = meData.acct || meData.username
+    // acct is just "seldo" for local accounts, so always append @instance
+    const username = `${meData.username}@${instance}`
 
     // Fetch home timeline
     const cutoff = Date.now() - 24 * 60 * 60 * 1000
