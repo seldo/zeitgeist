@@ -21,7 +21,7 @@ export async function POST(request: NextRequest) {
 
   // Copilot has a 64k token context limit. Reserve ~4k tokens for the prompt
   // template and response, leaving ~60k tokens for posts (~4 chars per token).
-  const maxChars = 60000 * 4
+  const maxChars = 56000 * 3
   const allFormatted = posts
     .slice(0, 2000)
     .map((p, i) => `[${i + 1}] ${p.text} (${p.url})`)
