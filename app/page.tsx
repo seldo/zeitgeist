@@ -43,7 +43,6 @@ export default function Home() {
     const params = new URLSearchParams(window.location.search)
     if (params.get('github_auth') === 'success') {
       window.history.replaceState({}, '', '/')
-      setLlmProvider('github-copilot')
       const ghUser = document.cookie.split('; ').find(c => c.startsWith('github_username='))?.split('=')[1]
       if (ghUser) setGithubUser(ghUser)
       setState({ status: 'login' })
@@ -62,13 +61,10 @@ export default function Home() {
       setPlatform('twitter')
       // Auto-detect GitHub Copilot auth so we don't prompt for an Anthropic key
       const ghUser = document.cookie.split('; ').find(c => c.startsWith('github_username='))?.split('=')[1]
-      let detectedProvider: LlmProvider = 'anthropic'
       if (ghUser) {
         setGithubUser(ghUser)
-        setLlmProvider('github-copilot')
-        detectedProvider = 'github-copilot'
       }
-      handleTwitterSession(detectedProvider)
+      handleTwitterSession()
       return
     }
     if (params.get('twitter_error')) {
@@ -206,16 +202,11 @@ export default function Home() {
           }
         }
 
-        // Auto-detect LLM provider based on auth state
-        const hasGithubAuth = !!document.cookie.split('; ').find(c => c.startsWith('github_username='))
-        const detectedProvider: LlmProvider = hasGithubAuth ? 'github-copilot' : 'anthropic'
-        if (hasGithubAuth) setLlmProvider('github-copilot')
-
         const cached = loadCachedSummary('bluesky')
         if (cached && cached.handle === resolvedHandle) {
           setState({ status: 'done', ...cached, platform: 'bluesky' })
         } else {
-          await fetchAndSummarizeBluesky(agent, resolvedHandle, storedKey || undefined, detectedProvider)
+          await fetchAndSummarizeBluesky(agent, resolvedHandle, storedKey || undefined, llmProvider)
         }
       } else {
         const cached = loadCachedSummary('bluesky') || loadCachedSummary('twitter')
