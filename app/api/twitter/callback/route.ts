@@ -76,6 +76,15 @@ export async function GET(request: NextRequest) {
     })
   }
 
+  // Client-readable cookie so the frontend can detect Twitter auth
+  response.cookies.set('twitter_authed', '1', {
+    httpOnly: false,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+    maxAge: tokenData.expires_in || 7200,
+    path: '/',
+  })
+
   // Clean up OAuth cookies
   response.cookies.delete('twitter_code_verifier')
   response.cookies.delete('twitter_oauth_state')

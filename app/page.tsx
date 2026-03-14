@@ -26,6 +26,7 @@ export default function Home() {
   const [platform, setPlatform] = useState<Platform>('bluesky')
   const [llmProvider, setLlmProvider] = useState<LlmProvider>('anthropic')
   const [githubUser, setGithubUser] = useState<string | null>(null)
+  const [twitterAuthed, setTwitterAuthed] = useState(false)
   const clientRef = useRef<import('@atproto/oauth-client-browser').BrowserOAuthClient | null>(null)
   const agentRef = useRef<import('@atproto/api').Agent | null>(null)
 
@@ -36,6 +37,11 @@ export default function Home() {
     // Check GitHub username cookie
     const ghUser = document.cookie.split('; ').find(c => c.startsWith('github_username='))?.split('=')[1]
     if (ghUser) setGithubUser(ghUser)
+    // Check Twitter auth cookie — default to Twitter tab if authed for Twitter but not Bluesky
+    const hasTwitterAuth = document.cookie.split('; ').some(c => c.startsWith('twitter_authed='))
+    if (hasTwitterAuth) {
+      setTwitterAuthed(true)
+    }
   }, [])
 
   useEffect(() => {
@@ -59,6 +65,7 @@ export default function Home() {
       // Clean up URL
       window.history.replaceState({}, '', '/')
       setPlatform('twitter')
+      setTwitterAuthed(true)
       // Auto-detect GitHub Copilot auth so we don't prompt for an Anthropic key
       const ghUser = document.cookie.split('; ').find(c => c.startsWith('github_username='))?.split('=')[1]
       if (ghUser) {
@@ -339,6 +346,7 @@ export default function Home() {
     clientRef.current = null
     // Clear Twitter cookies
     await fetch('/api/twitter/signout', { method: 'POST' }).catch(() => {})
+    setTwitterAuthed(false)
     // Clear GitHub cookies
     await fetch('/api/github/signout', { method: 'POST' }).catch(() => {})
     setGithubUser(null)
@@ -349,6 +357,34 @@ export default function Home() {
     // Re-initialize OAuth client so Bluesky sign-in works without a page refresh
     // Skip session restore so it doesn't immediately sign back in
     initOAuth(true)
+  }
+
+  async function switchPlatform(target: Platform) {
+    setPlatform(target)
+    if (target === activePlatform) return
+
+    const cached = loadCachedSummary(target)
+    if (cached) {
+      setState({ status: 'done', ...cached, platform: target })
+      return
+    }
+
+    if (target === 'twitter') {
+      if (!twitterAuthed) {
+        // Not authed for Twitter — go to login so they can sign in
+        setState({ status: 'login' })
+        return
+      }
+      await handleTwitterSession()
+    } else {
+      if (!agentRef.current) {
+        // Not authed for Bluesky — go to login so they can sign in
+        setState({ status: 'login' })
+        return
+      }
+      const storedKey = localStorage.getItem('zeitgeist_api_key')
+      await fetchAndSummarizeBluesky(agentRef.current, handle, storedKey || undefined, llmProvider)
+    }
   }
 
   const activePlatform = (state.status === 'done' || state.status === 'streaming') ? state.platform : platform
@@ -607,10 +643,25 @@ export default function Home() {
 
         {(state.status === 'streaming' || state.status === 'done') && (
           <>
+            <div className="platformTabs" style={{ marginBottom: '1rem' }}>
+              <button
+                className={`platformTab ${activePlatform === 'bluesky' ? 'platformTabActive' : ''}`}
+                onClick={() => switchPlatform('bluesky')}
+                disabled={state.status === 'streaming'}
+              >
+                Bluesky
+              </button>
+              <button
+                className={`platformTab ${activePlatform === 'twitter' ? 'platformTabActive' : ''}`}
+                onClick={() => switchPlatform('twitter')}
+                disabled={state.status === 'streaming'}
+              >
+                Twitter / X
+              </button>
+            </div>
             <div className="resultsMeta">
               <span className="postCount">
                 {state.postCount} {activePlatform === 'twitter' ? 'tweets' : 'posts'} · last 24 hours
-                {' · '}{activePlatform === 'twitter' ? 'Twitter / X' : 'Bluesky'}
               </span>
               <button className="textBtn" onClick={signOut}>Sign out</button>
             </div>

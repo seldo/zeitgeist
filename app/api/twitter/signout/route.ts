@@ -5,5 +5,6 @@ export async function POST(request: NextRequest) {
   const response = NextResponse.json({ ok: true })
   response.cookies.delete('twitter_access_token')
   response.cookies.delete('twitter_refresh_token')
+  response.cookies.delete('twitter_authed')
   return response
 }
