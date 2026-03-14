@@ -3,7 +3,7 @@ import './globals.css'
 
 export const metadata: Metadata = {
   title: 'Zeitgeist',
-  description: 'Summarize your Bluesky or Twitter feed',
+  description: 'Summarize your Bluesky, Twitter, or Mastodon feed',
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

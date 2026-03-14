@@ -1,19 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-
-function stripHtml(html: string): string {
-  return html
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<\/p><p>/gi, '\n\n')
-    .replace(/<[^>]*>/g, '')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&#39;/g, "'")
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/\s+/g, ' ')
-    .trim()
-}
+import { stripHtml } from '@/lib/html'
 
 export async function GET(request: NextRequest) {
   const accessToken = request.cookies.get('mastodon_access_token')?.value
