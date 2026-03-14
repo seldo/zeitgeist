@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react'
 import ReactMarkdown from 'react-markdown'
 
-type Platform = 'bluesky' | 'twitter'
+type Platform = 'bluesky' | 'twitter' | 'mastodon'
 type LlmProvider = 'anthropic' | 'github-copilot'
 
 type Recommendation = { url: string; reason: string }
@@ -29,6 +29,13 @@ export default function Home() {
   const [llmProvider, setLlmProvider] = useState<LlmProvider>('anthropic')
   const [githubUser, setGithubUser] = useState<string | null>(null)
   const [twitterAuthed, setTwitterAuthed] = useState(false)
+  const [mastodonAuthed, setMastodonAuthed] = useState(false)
+  const [mastodonInstance, setMastodonInstance] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('zeitgeist_mastodon_instance') || ''
+    }
+    return ''
+  })
   const [recommendations, setRecommendations] = useState<Recommendation[]>([])
   const [recsLoading, setRecsLoading] = useState(false)
   const feedPostsRef = useRef<FeedPost[]>([])
@@ -61,6 +68,10 @@ export default function Home() {
     const hasTwitterAuth = document.cookie.split('; ').some(c => c.startsWith('twitter_authed='))
     if (hasTwitterAuth) {
       setTwitterAuthed(true)
+    }
+    const hasMastodonAuth = document.cookie.split('; ').some(c => c.startsWith('mastodon_authed='))
+    if (hasMastodonAuth) {
+      setMastodonAuthed(true)
     }
   }, [])
 
@@ -98,6 +109,23 @@ export default function Home() {
       const error = params.get('twitter_error')!
       window.history.replaceState({}, '', '/')
       setState({ status: 'error', message: `Twitter auth failed: ${error}` })
+      return
+    }
+    if (params.get('mastodon_auth') === 'success') {
+      window.history.replaceState({}, '', '/')
+      setPlatform('mastodon')
+      setMastodonAuthed(true)
+      const ghUser = document.cookie.split('; ').find(c => c.startsWith('github_username='))?.split('=')[1]
+      if (ghUser) {
+        setGithubUser(ghUser)
+      }
+      handleMastodonSession()
+      return
+    }
+    if (params.get('mastodon_error')) {
+      const error = params.get('mastodon_error')!
+      window.history.replaceState({}, '', '/')
+      setState({ status: 'error', message: `Mastodon auth failed: ${error}` })
       return
     }
 
@@ -189,6 +217,97 @@ export default function Home() {
       const recsData = recs || []
       setRecommendations(recsData)
       localStorage.setItem('zeitgeist_recommendations_twitter', JSON.stringify({
+        recommendations: recsData,
+        timestamp: Date.now(),
+      }))
+    } catch {
+      // Silently fail
+    } finally {
+      setRecsLoading(false)
+    }
+  }
+
+  async function handleMastodonSession(providerOverride?: LlmProvider) {
+    try {
+      const cached = loadCachedSummary('mastodon')
+      if (cached) {
+        setState({ status: 'done', ...cached, platform: 'mastodon' })
+        loadCachedRecommendations('mastodon')
+        return
+      }
+
+      setRecommendations([])
+      setState({ status: 'loading', message: 'Fetching your Mastodon feed...' })
+
+      const storedKey = localStorage.getItem('zeitgeist_api_key')
+      const timelineRes = await fetch('/api/mastodon/timeline')
+
+      if (!timelineRes.ok) {
+        const err = await timelineRes.json().catch(() => ({ error: 'Failed to fetch timeline' }))
+        throw new Error(err.error)
+      }
+
+      const { posts, username } = await timelineRes.json()
+
+      if (!posts || posts.length === 0) {
+        setState({ status: 'error', message: 'No posts found in the last 24 hours.' })
+        return
+      }
+
+      setState({ status: 'loading', message: `Summarizing ${posts.length} posts...` })
+
+      const mastodonHandle = username
+      const keyToUse = storedKey || undefined
+
+      await streamSummary(posts, mastodonHandle, 'mastodon', keyToUse, providerOverride ?? llmProvider)
+
+      fetchMastodonRecommendations(posts, mastodonHandle, keyToUse)
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      setState({ status: 'error', message: msg })
+    }
+  }
+
+  async function fetchMastodonRecommendations(
+    feedPosts: FeedPost[],
+    userHandle: string,
+    key?: string,
+  ) {
+    try {
+      setRecsLoading(true)
+
+      const userPostsRes = await fetch('/api/mastodon/user-posts')
+      if (!userPostsRes.ok) {
+        setRecsLoading(false)
+        return
+      }
+      const { posts: userPosts } = await userPostsRes.json()
+      if (!userPosts || userPosts.length === 0) {
+        setRecsLoading(false)
+        return
+      }
+
+      const res = await fetch('/api/recommend', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userPosts,
+          feedPosts,
+          handle: userHandle,
+          apiKey: key,
+          source: 'mastodon',
+        }),
+      })
+
+      if (!res.ok) {
+        setRecsLoading(false)
+        return
+      }
+
+      const { recommendations: recs } = await res.json()
+      const recsData = recs || []
+      setRecommendations(recsData)
+      localStorage.setItem('zeitgeist_recommendations_mastodon', JSON.stringify({
         recommendations: recsData,
         timestamp: Date.now(),
       }))
@@ -292,11 +411,11 @@ export default function Home() {
           await fetchAndSummarizeBluesky(agent, resolvedHandle, storedKey || undefined, llmProvider)
         }
       } else {
-        const cached = loadCachedSummary('bluesky') || loadCachedSummary('twitter')
+        const cached = loadCachedSummary('bluesky') || loadCachedSummary('twitter') || loadCachedSummary('mastodon')
         if (cached) {
-          const cachedPlatform = loadCachedSummary('bluesky') ? 'bluesky' : 'twitter'
+          const cachedPlatform: Platform = loadCachedSummary('bluesky') ? 'bluesky' : loadCachedSummary('twitter') ? 'twitter' : 'mastodon'
           setState({ status: 'done', ...cached, platform: cachedPlatform })
-          if (cachedPlatform === 'bluesky') loadCachedRecommendations()
+          loadCachedRecommendations(cachedPlatform)
         } else {
           setState({ status: 'login' })
         }
@@ -453,14 +572,25 @@ export default function Home() {
     window.location.href = `/api/twitter/auth?origin=${encodeURIComponent(window.location.origin)}`
   }
 
+  async function signInMastodon() {
+    if (!mastodonInstance.trim()) return
+    if (apiKey.trim()) {
+      localStorage.setItem('zeitgeist_api_key', apiKey.trim())
+    }
+    localStorage.setItem('zeitgeist_mastodon_instance', mastodonInstance.trim())
+    window.location.href = `/api/mastodon/auth?origin=${encodeURIComponent(window.location.origin)}&instance=${encodeURIComponent(mastodonInstance.trim())}`
+  }
+
   async function refresh() {
     if (state.status !== 'done' && state.status !== 'streaming') return
     const storedKey = localStorage.getItem('zeitgeist_api_key')
 
     if (state.platform === 'twitter') {
-      // Clear cache so handleTwitterSession does a fresh fetch
       localStorage.removeItem('zeitgeist_summary_twitter')
       await handleTwitterSession()
+    } else if (state.platform === 'mastodon') {
+      localStorage.removeItem('zeitgeist_summary_mastodon')
+      await handleMastodonSession()
     } else {
       if (!agentRef.current) return
       await fetchAndSummarizeBluesky(agentRef.current, state.handle, storedKey || undefined, llmProvider)
@@ -471,12 +601,16 @@ export default function Home() {
     localStorage.removeItem('zeitgeist_api_key')
     localStorage.removeItem('zeitgeist_recommendations_bluesky')
     localStorage.removeItem('zeitgeist_recommendations_twitter')
+    localStorage.removeItem('zeitgeist_recommendations_mastodon')
     setRecommendations([])
     agentRef.current = null
     clientRef.current = null
     // Clear Twitter cookies
     await fetch('/api/twitter/signout', { method: 'POST' }).catch(() => {})
     setTwitterAuthed(false)
+    // Clear Mastodon cookies
+    await fetch('/api/mastodon/signout', { method: 'POST' }).catch(() => {})
+    setMastodonAuthed(false)
     // Clear GitHub cookies
     await fetch('/api/github/signout', { method: 'POST' }).catch(() => {})
     setGithubUser(null)
@@ -503,14 +637,18 @@ export default function Home() {
 
     if (target === 'twitter') {
       if (!twitterAuthed) {
-        // Not authed for Twitter — go to login so they can sign in
         setState({ status: 'login' })
         return
       }
       await handleTwitterSession()
+    } else if (target === 'mastodon') {
+      if (!mastodonAuthed) {
+        setState({ status: 'login' })
+        return
+      }
+      await handleMastodonSession()
     } else {
       if (!agentRef.current) {
-        // Not authed for Bluesky — go to login so they can sign in
         setState({ status: 'login' })
         return
       }
@@ -548,6 +686,12 @@ export default function Home() {
                 onClick={() => setPlatform('twitter')}
               >
                 Twitter / X
+              </button>
+              <button
+                className={`platformTab ${platform === 'mastodon' ? 'platformTabActive' : ''}`}
+                onClick={() => setPlatform('mastodon')}
+              >
+                Mastodon
               </button>
             </div>
 
@@ -717,6 +861,100 @@ export default function Home() {
                 </p>
               </>
             )}
+
+            {platform === 'mastodon' && (
+              <>
+                <h2 className="cardTitle">Sign in with Mastodon</h2>
+                <div className="formGroup">
+                  <label className="label" htmlFor="mastodonInstance">Instance</label>
+                  <input
+                    id="mastodonInstance"
+                    className="input"
+                    type="text"
+                    value={mastodonInstance}
+                    onChange={(e) => {
+                      setMastodonInstance(e.target.value)
+                      localStorage.setItem('zeitgeist_mastodon_instance', e.target.value)
+                    }}
+                    onKeyDown={(e) => e.key === 'Enter' && signInMastodon()}
+                    placeholder="mastodon.social, hachyderm.io, etc."
+                  />
+                  <p className="hint" style={{ marginTop: '0.5rem' }}>
+                    Also works with compatible servers (Pleroma, GoToSocial, etc.)
+                  </p>
+                </div>
+                <div className="formGroup">
+                  <label className="label">LLM Provider</label>
+                  <div className="platformTabs" style={{ marginBottom: '0.5rem' }}>
+                    <button
+                      className={`platformTab ${llmProvider === 'anthropic' ? 'platformTabActive' : ''}`}
+                      onClick={() => setLlmProvider('anthropic')}
+                    >
+                      Anthropic
+                    </button>
+                    <button
+                      className={`platformTab ${llmProvider === 'github-copilot' ? 'platformTabActive' : ''}`}
+                      onClick={() => setLlmProvider('github-copilot')}
+                    >
+                      GitHub Copilot
+                    </button>
+                  </div>
+                </div>
+                {llmProvider === 'anthropic' && (
+                  <div className="formGroup">
+                    <label className="label" htmlFor="apiKey">
+                      Anthropic API key
+                    </label>
+                    <input
+                      id="apiKey"
+                      className="input"
+                      type="password"
+                      value={apiKey}
+                      onChange={(e) => setApiKey(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && signInMastodon()}
+                      placeholder="sk-ant-..."
+                    />
+                    <p className="hint" style={{ marginTop: '0.5rem' }}>
+                      Get your API key from{' '}
+                      <a href="https://platform.claude.com/settings/keys" target="_blank" rel="noopener noreferrer">
+                        Anthropic&apos;s console
+                      </a>
+                      . You&apos;ll need an Anthropic account with API credits.
+                    </p>
+                  </div>
+                )}
+                {llmProvider === 'github-copilot' && !githubUser && (
+                  <div className="formGroup">
+                    <button
+                      className="btn"
+                      onClick={() => {
+                        window.location.href = `/api/github/auth?origin=${encodeURIComponent(window.location.origin)}`
+                      }}
+                    >
+                      Sign in with GitHub
+                    </button>
+                    <p className="hint" style={{ marginTop: '0.5rem' }}>
+                      Requires a GitHub Copilot subscription. No API key needed.
+                    </p>
+                  </div>
+                )}
+                {llmProvider === 'github-copilot' && githubUser && (
+                  <p className="hint" style={{ marginBottom: '0.5rem' }}>
+                    Signed in to GitHub as <strong>{githubUser}</strong>
+                  </p>
+                )}
+                <button
+                  className="btn"
+                  onClick={signInMastodon}
+                  disabled={!mastodonInstance.trim() || (llmProvider === 'anthropic' && !apiKey.trim()) || (llmProvider === 'github-copilot' && !githubUser)}
+                >
+                  Sign in with Mastodon
+                </button>
+                <p className="hint">
+                  You&apos;ll be redirected to your Mastodon instance to authorize access to your feed.
+                </p>
+              </>
+            )}
           </div>
         )}
 
@@ -790,6 +1028,13 @@ export default function Home() {
               >
                 Twitter / X
               </button>
+              <button
+                className={`platformTab ${activePlatform === 'mastodon' ? 'platformTabActive' : ''}`}
+                onClick={() => switchPlatform('mastodon')}
+                disabled={state.status === 'streaming'}
+              >
+                Mastodon
+              </button>
             </div>
             <div className="resultsMeta">
               <span className="postCount">
@@ -821,8 +1066,10 @@ export default function Home() {
                     <p className="recReason">{rec.reason}</p>
                     {activePlatform === 'bluesky' ? (
                       <BlueskyEmbed url={rec.url} />
-                    ) : (
+                    ) : activePlatform === 'twitter' ? (
                       <TwitterEmbed url={rec.url} />
+                    ) : (
+                      <MastodonEmbed url={rec.url} />
                     )}
                   </div>
                 ))}
@@ -911,6 +1158,21 @@ function TwitterEmbed({ url }: { url: string }) {
 
   if (!embedHtml) return null
   return <div ref={containerRef} className="twitterEmbedContainer" dangerouslySetInnerHTML={{ __html: embedHtml }} />
+}
+
+function MastodonEmbed({ url }: { url: string }) {
+  const [embedHtml, setEmbedHtml] = useState('')
+
+  useEffect(() => {
+    fetch(`/api/oembed?url=${encodeURIComponent(url)}`)
+      .then(res => res.json())
+      .then(data => setEmbedHtml(data.html || ''))
+      .catch(() => {})
+  }, [url])
+
+  if (!embedHtml) return null
+  // Mastodon oEmbed returns an iframe directly — no extra script needed
+  return <div className="mastodonEmbedContainer" dangerouslySetInnerHTML={{ __html: embedHtml }} />
 }
 
 function saveCachedSummary(summary: string, postCount: number, handle: string, platform: Platform) {

@@ -10,7 +10,7 @@ export async function POST(request: NextRequest) {
     feedPosts: { text: string; url: string }[]
     handle: string
     apiKey?: string
-    source?: 'bluesky' | 'twitter'
+    source?: 'bluesky' | 'twitter' | 'mastodon'
   }
 
   const feedSource = source || 'bluesky'
@@ -19,7 +19,8 @@ export async function POST(request: NextRequest) {
     return Response.json({ error: 'Missing posts data' }, { status: 400 })
   }
 
-  const ownerHandle = feedSource === 'twitter' ? TWITTER_OWNER_HANDLE : BLUESKY_OWNER_HANDLE
+  const MASTODON_OWNER_HANDLE = process.env.MASTODON_OWNER_HANDLE ?? ''
+  const ownerHandle = feedSource === 'twitter' ? TWITTER_OWNER_HANDLE : feedSource === 'mastodon' ? MASTODON_OWNER_HANDLE : BLUESKY_OWNER_HANDLE
   const isOwner = ownerHandle !== '' && handle?.replace(/^@/, '') === ownerHandle
   const keyToUse = isOwner ? process.env.ANTHROPIC_API_KEY : apiKey
 
@@ -48,7 +49,7 @@ export async function POST(request: NextRequest) {
     messages: [
       {
         role: 'user',
-        content: `I'm going to give you two sets of posts. The first set is the user's own recent ${feedSource === 'twitter' ? 'Twitter/X' : 'Bluesky'} posts — these represent topics they've been thinking about, their interests, and their perspectives. The second set is posts from the user's feed over the last 24 hours.
+        content: `I'm going to give you two sets of posts. The first set is the user's own recent ${feedSource === 'twitter' ? 'Twitter/X' : feedSource === 'mastodon' ? 'Mastodon' : 'Bluesky'} posts — these represent topics they've been thinking about, their interests, and their perspectives. The second set is posts from the user's feed over the last 24 hours.
 
 Based on what the user has been posting about, pick exactly 10 posts from their feed that they would most likely want to interact with — posts that are relevant to their interests, that they might want to reply to, like, or repost. Prefer posts that are conversation starters or that intersect with the user's demonstrated interests.
 

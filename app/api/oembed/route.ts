@@ -7,9 +7,17 @@ export async function GET(request: NextRequest) {
   }
 
   const isTwitter = url.includes('x.com/') || url.includes('twitter.com/')
-  const oembedEndpoint = isTwitter
-    ? `https://publish.twitter.com/oembed?url=${encodeURIComponent(url)}&omit_script=true`
-    : `https://embed.bsky.app/oembed?url=${encodeURIComponent(url)}&format=json`
+  const mastodonMatch = url.match(/^https?:\/\/([^/]+)\/@[^/]+\/\d+/)
+
+  let oembedEndpoint: string
+  if (isTwitter) {
+    oembedEndpoint = `https://publish.twitter.com/oembed?url=${encodeURIComponent(url)}&omit_script=true`
+  } else if (mastodonMatch) {
+    const instance = mastodonMatch[1]
+    oembedEndpoint = `https://${instance}/api/oembed?url=${encodeURIComponent(url)}&format=json`
+  } else {
+    oembedEndpoint = `https://embed.bsky.app/oembed?url=${encodeURIComponent(url)}&format=json`
+  }
 
   const res = await fetch(oembedEndpoint)
 

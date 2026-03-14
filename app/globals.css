@@ -372,6 +372,12 @@ body {
 }
 
 .blueskyEmbedContainer,
-.twitterEmbedContainer {
+.twitterEmbedContainer,
+.mastodonEmbedContainer {
   max-width: 550px;
+}
+
+.mastodonEmbedContainer iframe {
+  max-width: 100%;
+  border: none;
 }
