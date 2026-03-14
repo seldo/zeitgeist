@@ -6,6 +6,8 @@ import ReactMarkdown from 'react-markdown'
 type Platform = 'bluesky' | 'twitter'
 type LlmProvider = 'anthropic' | 'github-copilot'
 
+type Recommendation = { url: string; reason: string }
+
 type AppState =
   | { status: 'initializing' }
   | { status: 'login' }
@@ -27,11 +29,29 @@ export default function Home() {
   const [llmProvider, setLlmProvider] = useState<LlmProvider>('anthropic')
   const [githubUser, setGithubUser] = useState<string | null>(null)
   const [twitterAuthed, setTwitterAuthed] = useState(false)
+  const [recommendations, setRecommendations] = useState<Recommendation[]>([])
+  const [recsLoading, setRecsLoading] = useState(false)
+  const feedPostsRef = useRef<FeedPost[]>([])
   const clientRef = useRef<import('@atproto/oauth-client-browser').BrowserOAuthClient | null>(null)
   const agentRef = useRef<import('@atproto/api').Agent | null>(null)
 
   const ownerHandle = process.env.NEXT_PUBLIC_OWNER_HANDLE ?? 'seldo.com'
   const isOwner = handle.trim().replace(/^@/, '') === ownerHandle
+
+  function loadCachedRecommendations() {
+    try {
+      const raw = localStorage.getItem('zeitgeist_recommendations_bluesky')
+      if (!raw) return
+      const data = JSON.parse(raw)
+      if (Date.now() - data.timestamp > 24 * 60 * 60 * 1000) {
+        localStorage.removeItem('zeitgeist_recommendations_bluesky')
+        return
+      }
+      setRecommendations(data.recommendations || [])
+    } catch {
+      // ignore
+    }
+  }
 
   useEffect(() => {
     // Check GitHub username cookie
@@ -212,6 +232,7 @@ export default function Home() {
         const cached = loadCachedSummary('bluesky')
         if (cached && cached.handle === resolvedHandle) {
           setState({ status: 'done', ...cached, platform: 'bluesky' })
+          loadCachedRecommendations()
         } else {
           await fetchAndSummarizeBluesky(agent, resolvedHandle, storedKey || undefined, llmProvider)
         }
@@ -220,6 +241,7 @@ export default function Home() {
         if (cached) {
           const cachedPlatform = loadCachedSummary('bluesky') ? 'bluesky' : 'twitter'
           setState({ status: 'done', ...cached, platform: cachedPlatform })
+          if (cachedPlatform === 'bluesky') loadCachedRecommendations()
         } else {
           setState({ status: 'login' })
         }
@@ -271,6 +293,7 @@ export default function Home() {
     provider: LlmProvider = 'anthropic',
   ) {
     try {
+      setRecommendations([])
       setState({ status: 'loading', message: 'Fetching your feed...' })
       const posts = await fetchLast24Hours(agent)
 
@@ -279,11 +302,60 @@ export default function Home() {
         return
       }
 
+      feedPostsRef.current = posts
+
       setState({ status: 'loading', message: `Summarizing ${posts.length} posts...` })
       await streamSummary(posts, userHandle, 'bluesky', key, provider)
+
+      // After summary, fetch recommendations in the background
+      fetchRecommendations(agent, userHandle, posts, key)
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err)
       setState({ status: 'error', message: msg })
+    }
+  }
+
+  async function fetchRecommendations(
+    agent: import('@atproto/api').Agent,
+    userHandle: string,
+    feedPosts: FeedPost[],
+    key?: string,
+  ) {
+    try {
+      setRecsLoading(true)
+      const userPosts = await fetchUserPosts(agent, userHandle)
+      if (userPosts.length === 0) {
+        setRecsLoading(false)
+        return
+      }
+
+      const res = await fetch('/api/recommend', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userPosts,
+          feedPosts,
+          handle: userHandle,
+          apiKey: key,
+        }),
+      })
+
+      if (!res.ok) {
+        setRecsLoading(false)
+        return
+      }
+
+      const { recommendations: recs } = await res.json()
+      const recsData = recs || []
+      setRecommendations(recsData)
+      localStorage.setItem('zeitgeist_recommendations_bluesky', JSON.stringify({
+        recommendations: recsData,
+        timestamp: Date.now(),
+      }))
+    } catch {
+      // Silently fail — recommendations are non-critical
+    } finally {
+      setRecsLoading(false)
     }
   }
 
@@ -342,6 +414,8 @@ export default function Home() {
 
   async function signOut() {
     localStorage.removeItem('zeitgeist_api_key')
+    localStorage.removeItem('zeitgeist_recommendations_bluesky')
+    setRecommendations([])
     agentRef.current = null
     clientRef.current = null
     // Clear Twitter cookies
@@ -675,6 +749,23 @@ export default function Home() {
             {state.status === 'done' && (
               <button className="refreshBtn" onClick={refresh}>Refresh summary</button>
             )}
+            {activePlatform === 'bluesky' && (recsLoading || recommendations.length > 0) && (
+              <div className="recsSection">
+                <h2 className="recsTitle">Posts you might want to interact with</h2>
+                {recsLoading && (
+                  <div className="loadingWrap">
+                    <div className="spinner" />
+                    <p className="loadingMsg">Finding posts relevant to your interests...</p>
+                  </div>
+                )}
+                {recommendations.map((rec, i) => (
+                  <div key={i} className="recItem">
+                    <p className="recReason">{rec.reason}</p>
+                    <BlueskyEmbed url={rec.url} />
+                  </div>
+                ))}
+              </div>
+            )}
           </>
         )}
 
@@ -699,6 +790,35 @@ function BlueskyEmbedScript() {
     return () => { document.body.removeChild(script) }
   }, [])
   return null
+}
+
+function BlueskyEmbed({ url }: { url: string }) {
+  const [embedHtml, setEmbedHtml] = useState('')
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    fetch(`/api/oembed?url=${encodeURIComponent(url)}`)
+      .then(res => res.json())
+      .then(data => setEmbedHtml(data.html || ''))
+      .catch(() => {})
+  }, [url])
+
+  useEffect(() => {
+    if (!embedHtml || !containerRef.current) return
+    // Load the embed script to convert the blockquote into an iframe
+    const script = document.createElement('script')
+    script.src = 'https://embed.bsky.app/static/embed.js'
+    script.async = true
+    containerRef.current.appendChild(script)
+    return () => {
+      if (containerRef.current?.contains(script)) {
+        containerRef.current.removeChild(script)
+      }
+    }
+  }, [embedHtml])
+
+  if (!embedHtml) return null
+  return <div ref={containerRef} className="blueskyEmbedContainer" dangerouslySetInnerHTML={{ __html: embedHtml }} />
 }
 
 function saveCachedSummary(summary: string, postCount: number, handle: string, platform: Platform) {
@@ -731,6 +851,33 @@ function loadCachedSummary(platform: Platform): { summary: string; postCount: nu
 }
 
 type FeedPost = { text: string; url: string }
+
+async function fetchUserPosts(agent: import('@atproto/api').Agent, handle: string): Promise<FeedPost[]> {
+  const posts: FeedPost[] = []
+  let cursor: string | undefined
+
+  while (posts.length < 100) {
+    const res = await agent.getAuthorFeed({ actor: handle, limit: 100, cursor })
+    const feed = res.data.feed
+
+    for (const item of feed) {
+      // Only include the user's own posts (not reposts of others)
+      if (item.post.author.handle !== handle) continue
+      const record = item.post.record as { text?: string }
+      if (record.text?.trim()) {
+        const rkey = item.post.uri.split('/').pop()
+        const url = `https://bsky.app/profile/${handle}/post/${rkey}`
+        posts.push({ text: record.text.trim(), url })
+      }
+      if (posts.length >= 100) break
+    }
+
+    if (!res.data.cursor || feed.length === 0) break
+    cursor = res.data.cursor
+  }
+
+  return posts
+}
 
 async function fetchLast24Hours(agent: import('@atproto/api').Agent): Promise<FeedPost[]> {
   const cutoffMs = Date.now() - 24 * 60 * 60 * 1000

@@ -344,3 +344,33 @@ body {
   margin-left: auto;
   margin-right: auto;
 }
+
+/* ===== RECOMMENDATIONS ===== */
+
+.recsSection {
+  margin-top: 2rem;
+}
+
+.recsTitle {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--ink);
+  margin: 0 0 1.25rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--blue-dim);
+}
+
+.recItem {
+  margin-bottom: 1.5rem;
+}
+
+.recReason {
+  font-size: 0.85rem;
+  font-style: italic;
+  color: var(--ink-faint);
+  margin: 0 0 0.5rem;
+}
+
+.blueskyEmbedContainer {
+  max-width: 550px;
+}
