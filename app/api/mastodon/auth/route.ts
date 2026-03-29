@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import crypto from 'crypto'
+import { mastodonFetch } from '@/lib/mastodon'
 
 export async function GET(request: NextRequest) {
   const origin = request.nextUrl.searchParams.get('origin') || request.nextUrl.origin
@@ -18,7 +19,7 @@ export async function GET(request: NextRequest) {
   const scopes = 'read:statuses read:accounts'
 
   // Register OAuth app on the instance
-  const appRes = await fetch(`https://${instance}/api/v1/apps`, {
+  const appRes = await mastodonFetch(`https://${instance}/api/v1/apps`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({

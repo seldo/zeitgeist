@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { mastodonFetch } from '@/lib/mastodon'
 
 export async function GET(request: NextRequest) {
   const { searchParams } = request.nextUrl
@@ -32,7 +33,7 @@ export async function GET(request: NextRequest) {
 
   const redirectUri = `${origin}/api/mastodon/callback`
 
-  const tokenRes = await fetch(`https://${instance}/oauth/token`, {
+  const tokenRes = await mastodonFetch(`https://${instance}/oauth/token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({

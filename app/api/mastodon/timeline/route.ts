@@ -1,5 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { stripHtml } from '@/lib/html'
+import { mastodonFetch } from '@/lib/mastodon'
+
+function accountOptedOut(account: { noindex?: boolean; note?: string }): boolean {
+  if (account.noindex === true) return true
+  if (account.note) {
+    const bio = stripHtml(account.note).toLowerCase()
+    if (bio.includes('#noindex') || bio.includes('#nobots')) return true
+  }
+  return false
+}
 
 export async function GET(request: NextRequest) {
   const accessToken = request.cookies.get('mastodon_access_token')?.value
@@ -11,7 +21,7 @@ export async function GET(request: NextRequest) {
 
   try {
     // Get the authenticated user's info
-    const meRes = await fetch(`https://${instance}/api/v1/accounts/verify_credentials`, {
+    const meRes = await mastodonFetch(`https://${instance}/api/v1/accounts/verify_credentials`, {
       headers: { Authorization: `Bearer ${accessToken}` },
     })
 
@@ -56,6 +66,9 @@ export async function GET(request: NextRequest) {
           hitOldPost = true
           break
         }
+        // Skip posts from accounts that have opted out of indexing/bots
+        if (accountOptedOut(status.account)) continue
+        if (status.reblog && accountOptedOut(status.reblog.account)) continue
         const text = stripHtml(status.content)
         if (text) {
           posts.push({ text, url: status.url })

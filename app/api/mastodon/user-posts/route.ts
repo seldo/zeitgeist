@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { stripHtml } from '@/lib/html'
+import { mastodonFetch } from '@/lib/mastodon'
 
 export async function GET(request: NextRequest) {
   const accessToken = request.cookies.get('mastodon_access_token')?.value
@@ -10,7 +11,7 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const meRes = await fetch(`https://${instance}/api/v1/accounts/verify_credentials`, {
+    const meRes = await mastodonFetch(`https://${instance}/api/v1/accounts/verify_credentials`, {
       headers: { Authorization: `Bearer ${accessToken}` },
     })
 
