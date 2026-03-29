@@ -66,6 +66,8 @@ export async function GET(request: NextRequest) {
           hitOldPost = true
           break
         }
+        // Skip DMs
+        if (status.visibility === 'direct') continue
         // Skip posts from accounts that have opted out of indexing/bots
         if (accountOptedOut(status.account)) continue
         if (status.reblog && accountOptedOut(status.reblog.account)) continue
