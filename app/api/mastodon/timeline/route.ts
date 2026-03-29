@@ -6,7 +6,7 @@ function accountOptedOut(account: { noindex?: boolean; note?: string }): boolean
   if (account.noindex === true) return true
   if (account.note) {
     const bio = stripHtml(account.note).toLowerCase()
-    if (bio.includes('#noindex') || bio.includes('#nobots')) return true
+    if (bio.includes('#noindex') || bio.includes('#nobots') || bio.includes('#noai')) return true
   }
   return false
 }
