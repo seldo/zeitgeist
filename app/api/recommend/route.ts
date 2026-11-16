@@ -43,9 +43,14 @@ export async function POST(request: NextRequest) {
     .map((p, i) => `[${i + 1}] ${p.text} (${p.url})`)
     .join('\n\n')
 
-  const response = await client.messages.create({
-    model: 'claude-sonnet-4-6',
-    max_tokens: 2048,
+  // Sonnet 5.5 thinks by default; low effort keeps this fast.
+  // fallbacks: 'default' retries on another model if a safety classifier declines.
+  const response = await client.beta.messages.create({
+    betas: ['server-side-fallback-2026-07-01'],
+    model: 'claude-sonnet-5-5',
+    max_tokens: 16000,
+    output_config: { effort: 'low' },
+    fallbacks: 'default',
     messages: [
       {
         role: 'user',
@@ -64,7 +69,9 @@ ${feedPostsText}`,
     ],
   })
 
-  const text = response.content[0].type === 'text' ? response.content[0].text : ''
+  // The response can start with thinking blocks, so find the text block instead of using content[0]
+  const textBlock = response.content.find((b) => b.type === 'text')
+  const text = textBlock?.type === 'text' ? textBlock.text : ''
 
   // Parse the JSON array from the response
   try {

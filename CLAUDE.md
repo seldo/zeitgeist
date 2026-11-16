@@ -52,4 +52,4 @@ See `.env.local.example` for the full list. Key ones:
 
 - Plain CSS in [app/globals.css](app/globals.css) using seldo.com design tokens (Lora + DM Mono fonts)
 - No Tailwind (deps in package.json but unused)
-- Claude model: `claude-sonnet-4-6`
+- Claude model: `claude-sonnet-5-5`

@@ -37,9 +37,14 @@ export async function POST(request: NextRequest) {
     .map((p, i) => `[${i + 1}] ${p.text} (${p.url})`)
     .join('\n\n')
 
-  const stream = client.messages.stream({
-    model: 'claude-sonnet-4-6',
-    max_tokens: 2048,
+  // Sonnet 5.5 thinks by default; low effort keeps this fast.
+  // fallbacks: 'default' retries on another model if a safety classifier declines.
+  const stream = client.beta.messages.stream({
+    betas: ['server-side-fallback-2026-07-01'],
+    model: 'claude-sonnet-5-5',
+    max_tokens: 16000,
+    output_config: { effort: 'low' },
+    fallbacks: 'default',
     messages: [
       {
         role: 'user',
